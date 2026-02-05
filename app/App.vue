@@ -1571,9 +1571,14 @@ async function fetchCommands(directory?: string) {
   }
 }
 
-async function fetchSessionStatus() {
+async function fetchSessionStatus(directory?: string) {
   try {
-    const response = await fetch(`${OPENCODE_BASE_URL}/session/status`);
+    const params = new URLSearchParams();
+    if (directory) params.set('directory', directory);
+    const query = params.toString();
+    const response = await fetch(
+      `${OPENCODE_BASE_URL}/session/status${query ? `?${query}` : ''}`,
+    );
     if (!response.ok) throw new Error(`Session status request failed (${response.status})`);
     const data = (await response.json()) as Record<string, { type?: string }>;
     sessionStatusById.clear();
@@ -2162,7 +2167,7 @@ watch(selectedSessionId, () => {
     void fetchHistory(selectedSessionId.value);
     void restoreShellSessions(selectedSessionId.value);
   }
-  void fetchSessionStatus();
+  void fetchSessionStatus(activeDirectory.value || undefined);
 },
 { immediate: true });
 
@@ -4029,7 +4034,7 @@ onMounted(() => {
   void bootstrapSelections();
   fetchProviders();
   fetchAgents();
-  fetchSessionStatus();
+  fetchSessionStatus(activeDirectory.value || undefined);
   fetchCommands(activeDirectory.value || undefined);
   fetchPendingPermissions();
   const availableThemes = getBundledThemeNames();
