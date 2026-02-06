@@ -1859,7 +1859,7 @@ async function fetchProviders() {
       Object.values(provider.models ?? {}).forEach((model) => {
         const providerLabel = provider.id || model.providerID || 'unknown';
         const modelLabel = model.name ? `${model.name} (${model.id})` : model.id;
-        const label = `${providerLabel} / ${modelLabel}`;
+        const label = `[${providerLabel}] ${modelLabel}`;
         models.push({
           id: model.id,
           label,
