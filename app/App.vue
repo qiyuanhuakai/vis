@@ -42,6 +42,7 @@
                 v-for="q in queue.filter((entry) => !entry.isMessage || entry.isSubagentMessage)"
                 :key="q.permissionId ?? q.callId ?? q.messageId ?? q.time"
                 class="term"
+                @pointerdown.capture="focusTerm(q, $event)"
                 :data-tool-key="q.toolKey ?? q.callId ?? undefined"
                 :data-message-key="q.messageId ? buildMessageKey(q.messageId, q.sessionId) : undefined"
                 :class="{
@@ -1108,7 +1109,6 @@ function startInputResize(event: PointerEvent) {
 
 function startTermDrag(entry: FileReadEntry, event: PointerEvent) {
   if (event.button !== 0) return;
-  bringToFront(entry);
   resizeState.value = null;
   const metrics = getCanvasMetrics();
   if (!metrics) return;
@@ -1137,7 +1137,6 @@ function startTermDrag(entry: FileReadEntry, event: PointerEvent) {
 
 function startTermResize(entry: FileReadEntry, event: PointerEvent) {
   if (event.button !== 0) return;
-  bringToFront(entry);
   dragState.value = null;
   const metrics = getCanvasMetrics();
   if (!metrics) return;
@@ -1165,6 +1164,11 @@ function startTermResize(entry: FileReadEntry, event: PointerEvent) {
   (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
   event.stopPropagation();
   event.preventDefault();
+}
+
+function focusTerm(entry: FileReadEntry, event: PointerEvent) {
+  if (event.button !== 0) return;
+  bringToFront(entry);
 }
 
 function handlePointerMove(event: PointerEvent) {
