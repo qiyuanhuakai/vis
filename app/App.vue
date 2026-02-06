@@ -623,7 +623,7 @@ const todoPanelSessions = computed(() => {
       error: todoErrorBySessionId.value[sessionId],
     };
   });
-  const visible = list.filter((entry) => entry.todos.length > 0 || entry.loading || Boolean(entry.error));
+  const visible = list.filter((entry) => entry.todos.length > 0 || Boolean(entry.error));
   if (visible.length === 0) return [] as TodoPanelSession[];
   visible.sort((a, b) => {
     if (a.sessionId === selectedSessionId.value) return -1;
