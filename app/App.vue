@@ -35,6 +35,8 @@
             @wheel="handleMessageDockWheel"
             @touchmove="handleMessageDockScroll"
             @resume-follow="resumeFollow"
+            @fork-message="handleForkMessage"
+            @revert-message="handleRevertMessage"
           />
           <div ref="canvasEl" class="canvas">
             <TransitionGroup appear name="fade">
@@ -978,6 +980,51 @@ function persistComposerDraftForCurrentContext() {
     lastSentUserMessageId: readLastUserMessageIdForContext(contextKey) || undefined,
     updatedAt: Date.now(),
   };
+  writeComposerDraft(contextKey, draft);
+}
+
+function buildComposerDraftFromUserMessage(payload: {
+  sessionId: string;
+  messageId: string;
+}): ComposerDraft {
+  const messageKey = buildMessageKey(payload.messageId, payload.sessionId);
+  const messageEntry = queue.value.find(
+    (entry) =>
+      entry.isMessage &&
+      !entry.isSubagentMessage &&
+      entry.role === 'user' &&
+      entry.sessionId === payload.sessionId &&
+      entry.messageId === payload.messageId,
+  );
+  const messageInput = messageContentById.get(messageKey) ?? messageEntry?.content ?? '';
+  const sourceAttachments =
+    messageAttachmentsById.get(messageKey) ?? messageEntry?.attachments ?? [];
+  const attachmentsForDraft: Attachment[] = sourceAttachments.map((item) => ({
+    id: item.id,
+    filename: item.filename,
+    mime: item.mime,
+    dataUrl: item.url,
+  }));
+  const meta = userMessageMetaById.get(payload.messageId);
+  return {
+    messageInput,
+    attachments: attachmentsForDraft,
+    agent: meta?.agent ?? '',
+    model: meta?.modelId ?? '',
+    variant: meta?.variant,
+    updatedAt: Date.now(),
+  };
+}
+
+function seedForkedSessionComposerDraft(
+  payload: { sessionId: string; messageId: string },
+  forkedSession: SessionInfo,
+) {
+  if (!forkedSession.id) return;
+  const projectId = forkedSession.projectID || resolveProjectIdForSession(payload.sessionId);
+  const contextKey = buildComposerContextKey(projectId, forkedSession.id);
+  if (!contextKey) return;
+  const draft = buildComposerDraftFromUserMessage(payload);
   writeComposerDraft(contextKey, draft);
 }
 
@@ -2062,6 +2109,59 @@ async function deleteSession(sessionId: string) {
     void refreshSessionsForDirectory(activeDirectory.value || undefined);
   } catch (error) {
     sessionError.value = `Session delete failed: ${toErrorMessage(error)}`;
+  }
+}
+
+async function handleForkMessage(payload: { sessionId: string; messageId: string }) {
+  sessionError.value = '';
+  const params = new URLSearchParams({ directory: activeDirectory.value.trim() });
+  try {
+    sendStatus.value = 'Forking...';
+    const response = await fetch(
+      `${OPENCODE_BASE_URL}/session/${payload.sessionId}/fork?${params.toString()}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageID: payload.messageId }),
+      },
+    );
+    if (!response.ok) throw new Error(`Session fork failed (${response.status})`);
+    const data = (await response.json()) as SessionInfo;
+    if (data && typeof data.id === 'string') {
+      upsertSessionGraph(data);
+      const exists = sessions.value.some((session) => session.id === data.id);
+      if (!exists) sessions.value.unshift(data);
+      seedForkedSessionComposerDraft(payload, data);
+      if (data.projectID) selectedProjectId.value = data.projectID;
+      if (data.directory) selectedWorktreeDir.value = data.directory;
+      selectedSessionId.value = data.id;
+      void refreshSessionsForDirectory(data.directory || activeDirectory.value || undefined);
+    }
+    sendStatus.value = 'Forked.';
+  } catch (error) {
+    sessionError.value = `Session fork failed: ${toErrorMessage(error)}`;
+  }
+}
+
+async function handleRevertMessage(payload: { sessionId: string; messageId: string }) {
+  sessionError.value = '';
+  const params = new URLSearchParams({ directory: activeDirectory.value.trim() });
+  try {
+    sendStatus.value = 'Reverting...';
+    const response = await fetch(
+      `${OPENCODE_BASE_URL}/session/${payload.sessionId}/revert?${params.toString()}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageID: payload.messageId }),
+      },
+    );
+    if (!response.ok) throw new Error(`Session revert failed (${response.status})`);
+    sendStatus.value = 'Reverted.';
+    if (selectedSessionId.value === payload.sessionId) reloadSelectedSessionState();
+    void refreshSessionsForDirectory(activeDirectory.value || undefined);
+  } catch (error) {
+    sessionError.value = `Session revert failed: ${toErrorMessage(error)}`;
   }
 }
 
@@ -3418,7 +3518,7 @@ watch(
   { immediate: true },
 );
 
-watch(selectedSessionId, () => {
+function reloadSelectedSessionState() {
   const selected = sessions.value.find((session) => session.id === selectedSessionId.value);
   if (selected?.projectID) selectedProjectId.value = selected.projectID;
   disposeShellWindows({ preserve: true });
@@ -3444,8 +3544,9 @@ watch(selectedSessionId, () => {
     void fetchPendingQuestions(directory);
   }
   void fetchSessionStatus(activeDirectory.value || undefined);
-},
-{ immediate: true });
+}
+
+watch(selectedSessionId, reloadSelectedSessionState, { immediate: true });
 
 watch(
   [selectedProjectId, selectedSessionId],

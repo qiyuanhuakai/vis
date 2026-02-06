@@ -22,6 +22,19 @@
         }"
       >
           <div
+            v-if="q.role === 'user' && q.messageId && q.sessionId"
+            class="message-actions"
+          >
+            <button type="button" class="message-action" @click="confirmFork(q)">fork</button>
+            <button
+              type="button"
+              class="message-action message-action-danger"
+              @click="confirmRevert(q)"
+            >
+              revert
+            </button>
+          </div>
+          <div
             v-if="q.role === 'user' && formatMessageAgent(q)"
             class="message-agent"
           >
@@ -114,11 +127,13 @@ const props = defineProps<{
   isRetryStatus?: boolean;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   (event: 'scroll'): void;
   (event: 'wheel', eventArg: WheelEvent): void;
   (event: 'touchmove'): void;
   (event: 'resume-follow'): void;
+  (event: 'fork-message', payload: { sessionId: string; messageId: string }): void;
+  (event: 'revert-message', payload: { sessionId: string; messageId: string }): void;
 }>();
 
 const dockEl = ref<HTMLDivElement | null>(null);
@@ -126,6 +141,18 @@ const thinkingFrames = ['', '.', '..', '...'];
 const thinkingIndex = ref(0);
 const thinkingSuffix = ref('');
 let thinkingTimer: number | undefined;
+
+function confirmFork(entry: FileReadEntry) {
+  if (!entry.sessionId || !entry.messageId || entry.role !== 'user') return;
+  if (!window.confirm('Fork from this message?')) return;
+  emit('fork-message', { sessionId: entry.sessionId, messageId: entry.messageId });
+}
+
+function confirmRevert(entry: FileReadEntry) {
+  if (!entry.sessionId || !entry.messageId || entry.role !== 'user') return;
+  if (!window.confirm('Revert to this message?')) return;
+  emit('revert-message', { sessionId: entry.sessionId, messageId: entry.messageId });
+}
 
 function formatMessageMeta(entry: FileReadEntry) {
   const model = entry.messageModel?.trim();
@@ -278,6 +305,40 @@ defineExpose({ dockEl });
   left: 6px;
   font-size: 10px;
   color: rgba(191, 219, 254, 0.9);
+}
+
+.message-actions {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.message-action {
+  border: 1px solid rgba(148, 163, 184, 0.65);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.75);
+  color: #bfdbfe;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+
+.message-action:hover {
+  background: rgba(30, 41, 59, 0.92);
+}
+
+.message-action-danger {
+  border-color: rgba(248, 113, 113, 0.7);
+  background: rgba(127, 29, 29, 0.35);
+  color: #fecaca;
+}
+
+.message-action-danger:hover {
+  background: rgba(153, 27, 27, 0.5);
 }
 
 .message-meta {
