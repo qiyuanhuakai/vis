@@ -5300,6 +5300,22 @@ function extractPatch(payload: unknown) {
   const patchText = typeof input?.patchText === 'string' ? input.patchText : '';
   const parsedBlocks = patchText ? parsePatchTextBlocks(patchText) : [];
 
+  if (status !== 'running') {
+    if (parsedBlocks.length === 0) return null;
+    const baseCallId = callId ?? 'apply_patch';
+    const entries = parsedBlocks.map((_, index) => ({
+      content: '',
+      path: undefined,
+      isWrite: true,
+      callId: `${baseCallId}:${index}`,
+      toolStatus: status,
+      toolName: 'apply_patch',
+      toolTitle: undefined,
+      lang: 'diff',
+    }));
+    return entries;
+  }
+
   const metadataFilesRaw = Array.isArray(metadata?.files) ? metadata.files : [];
   const metadataBlocks = metadataFilesRaw
     .map((item, index) => {
@@ -6740,7 +6756,9 @@ function upsertToolEntry(
     else runningToolIds.delete(entry.callId);
   }
 
-  if (!entry.content.trim() && entry.toolStatus !== 'running') return;
+  if (!entry.content.trim() && entry.toolStatus !== 'running') {
+    if (!entry.callId || !toolIndexByCallId.has(entry.callId)) return;
+  }
 
   const resolveExpiry = (status: string | undefined, time: number, fallback: number) => {
     if (status === 'running') return Number.MAX_SAFE_INTEGER;

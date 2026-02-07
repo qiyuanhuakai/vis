@@ -133,6 +133,7 @@ const termClass = computed(() => ({
   'agent-tone-plan': entry.value.isMessage && props.resolveAgentTone(entry.value.messageAgent) === 'plan',
   'agent-tone-neutral':
     entry.value.isMessage && props.resolveAgentTone(entry.value.messageAgent) === 'neutral',
+  'is-tool-error': entry.value.toolStatus === 'error',
   'is-apply-patch': entry.value.toolName === 'apply_patch',
   'is-reasoning': entry.value.isReasoning || entry.value.isSubagentMessage,
   'is-shell': entry.value.isShell,
@@ -226,11 +227,23 @@ function onFloatingWheel(event: WheelEvent) {
   --term-border-color: #a855f7;
 }
 
+.term.is-tool-error {
+  background: #2a0f0f;
+  border-color: #ef4444;
+  --term-border-color: #ef4444;
+}
+
 .term.is-apply-patch .term-titlebar,
 .term.is-write .term-titlebar {
   background: rgba(168, 85, 247, 0.18);
   color: #e9d5ff;
   border-bottom: 1px solid rgba(168, 85, 247, 0.35);
+}
+
+.term.is-tool-error .term-titlebar {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fecaca;
+  border-bottom: 1px solid rgba(239, 68, 68, 0.35);
 }
 
 .term.is-permission .term-titlebar {
