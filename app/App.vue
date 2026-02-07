@@ -7033,7 +7033,7 @@ function upsertToolEntry(
 
   const resolveExpiry = (status: string | undefined, time: number, fallback: number) => {
     if (status === 'running') return Number.MAX_SAFE_INTEGER;
-    if (status === 'completed' || status === 'error' || status === 'cancelled') {
+    if (status === 'completed' || status === 'error') {
       return Math.max(fallback, time + TOOL_COMPLETE_TTL_MS);
     }
     if (status === 'pending') return Math.max(fallback, time + TOOL_PENDING_TTL_MS);
@@ -7066,6 +7066,23 @@ function upsertToolEntry(
     if (existingIndex !== undefined) {
       const existing = queue.value[existingIndex];
       if (existing) {
+        if (
+          entry.toolStatus &&
+          entry.toolStatus !== 'running' &&
+          entry.toolStatus !== 'pending' &&
+          existing.content.trim().length > 0
+        ) {
+          const nextExpiresAt = resolveExpiry(entry.toolStatus, time, defaultExpiry);
+          queue.value.splice(existingIndex, 1, {
+            ...existing,
+            time,
+            expiresAt: nextExpiresAt,
+            toolStatus: entry.toolStatus,
+            toolTitle: entry.toolTitle ?? existing.toolTitle,
+          });
+          toolIndexByCallId.set(entry.callId, existingIndex);
+          return;
+        }
         const nextPath = entry.path ?? existing.path;
         const nextDisplayPath = resolveWorktreeRelativePath(nextPath);
         const nextHeader = isBashTool || hideHeader
