@@ -3924,6 +3924,7 @@ function reloadSelectedSessionState() {
   if (selected?.projectID) selectedProjectId.value = selected.projectID;
   disposeShellWindows({ preserve: true });
   queue.value = [];
+  fileViewerQueue.value = [];
   messageIndexById.clear();
   toolIndexByCallId.clear();
   messageContentById.clear();
@@ -6147,9 +6148,11 @@ function extractMessage(payload: unknown, eventType: string) {
     id,
     messageId,
     content: message,
+    bodyContent: messageFromObject,
     role: resolvedRole,
     partId,
     partType,
+    isPartUpdatedEvent: normalizeEventType(eventType) === 'messagepartupdated',
     userMeta,
     messageTime,
   };
@@ -7558,7 +7561,17 @@ function connect() {
         messagePartOrderById.set(messageKey, order);
         mergedContent = order.map((key) => partMap.get(key) ?? '').join('');
       }
-      if (!message.content || message.content.trim().length === 0) {
+      if (
+        message.isPartUpdatedEvent &&
+        !isReasoning &&
+        !isSubagentMessage &&
+        !messageIndexById.has(messageKey) &&
+        typeof message.bodyContent === 'string' &&
+        message.bodyContent.trim().length > 0
+      ) {
+        mergedContent = message.bodyContent;
+      }
+      if (!mergedContent || mergedContent.trim().length === 0) {
         const emptyIndex = messageIndexById.get(messageKey);
         if (emptyIndex !== undefined) queue.value.splice(emptyIndex, 1);
         return;
