@@ -18,6 +18,10 @@ const props = defineProps<{
   theme: string;
 }>();
 
+const emit = defineEmits<{
+  (e: 'rendered'): void;
+}>();
+
 const state = reactive({
   isLoading: true,
   html: '',
@@ -52,6 +56,7 @@ async function startRender() {
       if (current !== state.requestId) return;
       state.html = html;
       state.isLoading = false;
+      nextTick(() => emit('rendered'));
     })
     .catch((error) => {
       if (current !== state.requestId) return;

@@ -1,8 +1,6 @@
 <template>
   <div class="output-panel-root">
-    <div
-      class="output-panel-shell"
-    >
+    <div class="output-panel-shell">
       <div
         ref="panelEl"
         class="output-panel-scroll"
@@ -11,180 +9,167 @@
         @touchmove="$emit('touchmove')"
       >
         <div ref="contentEl" class="output-panel-content">
-          <div
-            v-for="q in filteredQueue"
-            :key="q.messageKey ?? q.roundId ?? q.messageId ?? q.time"
-          >
-            <!-- Round rendering -->
-            <div v-if="q.isRound" class="output-round">
-              <div class="round-header">
-                <div class="round-header-left">
-                  <span v-if="formatRoundMeta(q)" class="round-meta">{{ formatRoundMeta(q) }}</span>
-                </div>
-                <div class="round-header-right">
-                  <button
-                    v-if="q.roundId && q.sessionId"
-                    type="button"
-                    class="output-entry-action"
-                    @click="confirmFork(q)"
-                  >
-                    fork
-                  </button>
-                </div>
-              </div>
-              
-              <div class="round-messages">
-                <div
-                  v-for="(msg, idx) in (q.roundMessages ?? [])"
-                  :key="msg.messageId ?? idx"
-                  class="round-msg"
-                >
-                  <div
-                    class="round-msg-indicator"
-                    :class="msg.role === 'user' ? 'round-msg-indicator-user' : 'round-msg-indicator-assistant'"
-                  />
-                  <div class="round-msg-content">
-                    <MessageViewer
-                      :code="msg.content"
-                      :lang="'markdown'"
-                      :theme="theme"
-                      :wrap-mode="'soft'"
-                      :gutter-mode="'none'"
-                      :is-message="true"
-                      @rendered="handleMessageRendered"
-                    />
-                    <div v-if="msg.attachments && msg.attachments.length > 0" class="output-entry-attachments">
-                      <img
-                        v-for="item in msg.attachments"
-                        :key="item.id"
-                        class="output-entry-attachment"
-                        :src="item.url"
-                        :alt="item.filename"
-                        loading="lazy"
+          <template v-for="q in filteredQueue" :key="q.messageKey ?? q.roundId ?? q.messageId ?? q.time">
+            <!-- ===== Round: nested box layout ===== -->
+            <div v-if="q.isRound" class="info-block">
+              <!-- Fork button (top-right) -->
+              <button
+                v-if="q.roundId && q.sessionId"
+                type="button"
+                class="ib-action ib-top-right"
+                @click="confirmFork(q)"
+              >FORK</button>
+
+              <!-- User message (always visible, agent theme left border) -->
+              <div class="ib-user-box" :style="getUserBoxStyle(q)">
+                <template v-for="(group, gi) in groupRoundMessages(q)" :key="gi">
+                  <template v-if="group.role === 'user'">
+                    <div class="ib-msg-block ib-msg-user">
+                      <MessageViewer
+                        v-for="(msg, mi) in group.messages"
+                        :key="msg.messageId ?? mi"
+                        :code="msg.content"
+                        :lang="'markdown'"
+                        :theme="theme"
+                        :wrap-mode="'soft'"
+                        :gutter-mode="'none'"
+                        :is-message="true"
+                        @rendered="handleMessageRendered"
                       />
                     </div>
-                  </div>
-                </div>
+                  </template>
+                </template>
               </div>
-              
-              <div class="round-footer">
-                <div class="round-footer-left">
-                  <span v-if="formatRoundUsage(q)" class="output-entry-usage">{{ formatRoundUsage(q) }}</span>
-                </div>
-                <div class="round-footer-right">
+
+              <!-- Assistant response area (no collapse, fade transition per message) -->
+              <div
+                v-if="hasAssistantMessages(q)"
+                class="ib-response-area"
+              >
+                <template v-for="(group, gi) in groupRoundMessages(q)" :key="gi">
+                  <template v-if="group.role === 'assistant'">
+                    <Transition name="ib-fade" mode="out-in">
+                      <div
+                        class="ib-msg-block ib-msg-assistant"
+                        :key="getGroupTransitionKey(group)"
+                      >
+                        <div class="ib-sender" :style="getSenderStyle(group)">
+                          {{ formatSenderLabel(group) }}
+                        </div>
+                        <div class="ib-msg-body">
+                          <MessageViewer
+                            :code="group.messages[group.messages.length - 1]?.content ?? ''"
+                            :lang="'markdown'"
+                            :theme="theme"
+                            :wrap-mode="'soft'"
+                            :gutter-mode="'none'"
+                            :is-message="true"
+                            @rendered="handleMessageRendered"
+                          />
+                        </div>
+                      </div>
+                    </Transition>
+                  </template>
+                </template>
+
+              </div>
+
+              <!-- Footer: meta left, actions right -->
+              <div class="ib-footer">
+                <span class="ib-footer-meta">{{ formatRoundFooterMeta(q) }}</span>
+                <span class="ib-footer-actions">
                   <button
                     v-if="q.messageKey && hasMessageDiffs(q.messageKey)"
                     type="button"
-                    class="output-entry-action output-entry-action-diff"
+                    class="ib-action ib-action-diff"
                     @click="showRoundDiff(q)"
-                  >
-                    DIFF
-                  </button>
+                  >DIFF</button>
                   <button
-                    v-if="q.roundId && q.sessionId"
+                    v-if="q.roundId && q.sessionId && q.messageKey && hasMessageDiffs(q.messageKey)"
                     type="button"
-                    class="output-entry-action output-entry-action-danger"
+                    class="ib-action ib-action-danger"
                     @click="confirmRevert(q)"
-                  >
-                    revert
-                  </button>
-                </div>
+                  >REVERT</button>
+                </span>
               </div>
             </div>
 
-            <!-- Non-round fallback (existing rendering) -->
+            <!-- ===== Non-round fallback ===== -->
             <div
               v-else
               class="output-entry"
-              :class="{
-                'is-user': q.role === 'user',
-              }"
+              :class="{ 'is-user': q.role === 'user' }"
               :style="getEntryStyle(q)"
             >
-           <div
-             v-if="q.role === 'user' && formatMessageAgent(q)"
-
-            class="output-entry-agent"
-            :style="getAgentTextStyle(q)"
-          >
-            {{ formatMessageAgent(q) }}
-          </div>
-          <div
-            class="output-entry-inner"
-            :class="{ 'is-scrolling': q.scroll }"
-            :style="{
-              '--scroll-distance': `${q.scrollDistance}px`,
-              '--scroll-duration': `${q.scrollDuration}s`,
-            }"
-          >
-            <MessageViewer
-              :code="q.content"
-              :lang="'markdown'"
-              :theme="theme"
-              :wrap-mode="'soft'"
-              :gutter-mode="'none'"
-              :is-message="true"
-              @rendered="handleMessageRendered"
-            />
-            <div v-if="q.attachments && q.attachments.length > 0" class="output-entry-attachments">
-              <img
-                v-for="item in q.attachments"
-                :key="item.id"
-                class="output-entry-attachment"
-                :src="item.url"
-                :alt="item.filename"
-                loading="lazy"
-              />
-            </div>
-          </div>
-          <div
-            v-if="hasFooter(q)"
-            class="output-entry-footer"
-          >
-            <div class="output-entry-footer-left">
-              <span v-if="formatMessageMeta(q)" class="output-entry-meta">{{ formatMessageMeta(q) }}</span>
-              <span v-if="formatMessageMeta(q) && formatMessageUsage(q)" class="output-entry-sep">•</span>
-              <span v-if="formatMessageUsage(q)" class="output-entry-usage">{{ formatMessageUsage(q) }}</span>
-            </div>
-            <div class="output-entry-footer-right">
-              <button
-                v-if="q.role === 'assistant' && q.messageKey && hasMessageDiffs(q.messageKey)"
-                type="button"
-                class="output-entry-action output-entry-action-diff"
-                @click="showMessageDiff(q)"
+              <div
+                v-if="q.role === 'user' && formatMessageAgent(q)"
+                class="output-entry-agent"
+                :style="getAgentTextStyle(q)"
+              >{{ formatMessageAgent(q) }}</div>
+              <div
+                class="output-entry-inner"
+                :class="{ 'is-scrolling': q.scroll }"
+                :style="{
+                  '--scroll-distance': `${q.scrollDistance}px`,
+                  '--scroll-duration': `${q.scrollDuration}s`,
+                }"
               >
-                DIFF
-              </button>
-              <button
-                v-if="q.role === 'user' && q.messageId && q.sessionId"
-                type="button"
-                class="output-entry-action"
-                @click="confirmFork(q)"
-              >
-                fork
-              </button>
-              <button
-                v-if="q.role === 'user' && q.messageId && q.sessionId"
-                type="button"
-                class="output-entry-action output-entry-action-danger"
-                @click="confirmRevert(q)"
-              >
-                revert
-              </button>
+                <MessageViewer
+                  :code="q.content"
+                  :lang="'markdown'"
+                  :theme="theme"
+                  :wrap-mode="'soft'"
+                  :gutter-mode="'none'"
+                  :is-message="true"
+                  @rendered="handleMessageRendered"
+                />
+                <div v-if="q.attachments && q.attachments.length > 0" class="output-entry-attachments">
+                  <img
+                    v-for="item in q.attachments"
+                    :key="item.id"
+                    class="output-entry-attachment"
+                    :src="item.url"
+                    :alt="item.filename"
+                    loading="lazy"
+                  />
+                </div>
+              </div>
+              <div v-if="hasFooter(q)" class="output-entry-footer">
+                <div class="output-entry-footer-left">
+                  <span v-if="formatMessageMeta(q)" class="output-entry-meta">{{ formatMessageMeta(q) }}</span>
+                  <span v-if="formatMessageMeta(q) && formatMessageUsage(q)" class="output-entry-sep">•</span>
+                  <span v-if="formatMessageUsage(q)" class="output-entry-usage">{{ formatMessageUsage(q) }}</span>
+                </div>
+                <div class="output-entry-footer-right">
+                  <button
+                    v-if="q.role === 'assistant' && q.messageKey && hasMessageDiffs(q.messageKey)"
+                    type="button"
+                    class="output-entry-action output-entry-action-diff"
+                    @click="showMessageDiff(q)"
+                  >DIFF</button>
+                  <button
+                    v-if="q.role === 'user' && q.messageId && q.sessionId"
+                    type="button"
+                    class="output-entry-action"
+                    @click="confirmFork(q)"
+                  >FORK</button>
+                  <button
+                    v-if="q.role === 'user' && q.messageId && q.sessionId && q.messageKey && hasMessageDiffs(q.messageKey)"
+                    type="button"
+                    class="output-entry-action output-entry-action-danger"
+                    @click="confirmRevert(q)"
+                  >REVERT</button>
+                </div>
+              </div>
             </div>
-           </div>
-           </div>
-          </div>
-           <button
-
+          </template>
+          <button
             v-show="!isFollowing"
             type="button"
             class="follow-button"
             aria-label="Scroll to latest"
             @click="$emit('resume-follow')"
-          >
-            ↓
-          </button>
+          >↓</button>
         </div>
       </div>
       <div class="statusbar" role="status" aria-live="polite">
@@ -200,7 +185,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { Transition, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import MessageViewer from './MessageViewer.vue';
 type FileReadEntry = {
   time: number;
@@ -327,11 +312,123 @@ function formatRoundUsage(entry: FileReadEntry): string {
   return `in ${input} + out ${output}`;
 }
 
+function formatRoundTimestamp(entry: FileReadEntry): string {
+  const messages = entry.roundMessages ?? [];
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+  return formatMessageTime(lastAssistant?.time ?? entry.messageTime);
+}
+
+function formatRoundElapsed(entry: FileReadEntry): string {
+  const messages = entry.roundMessages ?? [];
+  const userMsg = messages.find((m) => m.role === 'user');
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+  const start = userMsg?.time ?? entry.messageTime;
+  const end = lastAssistant?.time;
+  if (typeof start !== 'number' || typeof end !== 'number') return '';
+  const sec = Math.round((end - start) / 1000);
+  if (sec < 1) return '';
+  if (sec < 60) return `thought ${sec}s`;
+  const min = Math.floor(sec / 60);
+  const rem = sec % 60;
+  return rem > 0 ? `thought ${min}m${rem}s` : `thought ${min}m`;
+}
+
+function formatRoundFooterMeta(entry: FileReadEntry): string {
+  const parts: string[] = [];
+  const ts = formatRoundTimestamp(entry);
+  if (ts) parts.push(ts);
+  const elapsed = formatRoundElapsed(entry);
+  if (elapsed) parts.push(elapsed);
+  return parts.join(', ');
+}
+
 function showRoundDiff(entry: FileReadEntry) {
   if (!entry.messageKey) return;
   const diffs = props.messageDiffs?.get(entry.messageKey);
   if (!diffs || diffs.length === 0) return;
   emit('show-message-diff', { messageKey: entry.messageKey, diffs });
+}
+
+// --- Nested box helpers ---
+
+type MessageGroup = {
+  role: 'user' | 'assistant';
+  agent?: string;
+  model?: string;
+  providerId?: string;
+  modelId?: string;
+  variant?: string;
+  messages: RoundMessage[];
+};
+
+function groupRoundMessages(entry: FileReadEntry): MessageGroup[] {
+  const messages = entry.roundMessages ?? [];
+  if (messages.length === 0) return [];
+  const groups: MessageGroup[] = [];
+  let current: MessageGroup | null = null;
+  for (const msg of messages) {
+    const role = msg.role === 'user' ? 'user' : 'assistant';
+    const agent = msg.agent;
+    // Merge consecutive messages from same role+agent
+    if (current && current.role === role && current.agent === agent) {
+      current.messages.push(msg);
+      // Update model/variant to latest
+      if (msg.model) current.model = msg.model;
+      if (msg.providerId) current.providerId = msg.providerId;
+      if (msg.modelId) current.modelId = msg.modelId;
+      if (msg.variant) current.variant = msg.variant;
+    } else {
+      current = { role, agent, model: msg.model, providerId: msg.providerId, modelId: msg.modelId, variant: msg.variant, messages: [msg] };
+      groups.push(current);
+    }
+  }
+  return groups;
+}
+
+function hasAssistantMessages(entry: FileReadEntry): boolean {
+  return (entry.roundMessages ?? []).some((m) => m.role === 'assistant');
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function formatSenderLabel(group: MessageGroup): string {
+  if (group.role === 'user') return 'You';
+  const parts: string[] = [];
+  if (group.agent) parts.push(capitalize(group.agent));
+  const modelPath = group.providerId && group.modelId
+    ? `${group.providerId}/${group.modelId}`
+    : (group.model || '');
+  if (modelPath) parts.push(modelPath);
+  if (group.variant) parts.push(`(${group.variant})`);
+  return parts.join(' ') || 'Assistant';
+}
+
+function getSenderStyle(group: MessageGroup) {
+  if (group.role === 'user') return { color: '#94a3b8' }; // gray
+  const color = props.resolveAgentColor ? props.resolveAgentColor(group.agent) : '#4ade80';
+  return { color };
+}
+
+function getUserBoxStyle(entry: FileReadEntry) {
+  const agent = entry.messageAgent;
+  const color = props.resolveAgentColor ? props.resolveAgentColor(agent) : '#334155';
+  if (color.startsWith('#') && color.length === 7) {
+    return { borderLeftColor: `${color}99` };
+  }
+  return { borderLeftColor: color };
+}
+
+function getGroupTransitionKey(group: MessageGroup): string {
+  // Key by last message ID so Transition triggers when the displayed message changes
+  const last = group.messages[group.messages.length - 1];
+  return last?.messageId ?? String(group.messages.length);
+}
+
+function hasRoundFooterActions(entry: FileReadEntry): boolean {
+  if (entry.messageKey && hasMessageDiffs(entry.messageKey)) return true; // DIFF & REVERT
+  return false;
 }
 
 const panelEl = ref<HTMLDivElement | null>(null);
@@ -732,6 +829,14 @@ defineExpose({ panelEl });
   word-break: break-word;
 }
 
+.output-panel-shell .shiki-host.is-message :deep(pre.shiki) {
+  line-height: inherit !important;
+}
+
+.output-panel-shell .shiki-host.is-message :deep(code) {
+  line-height: inherit !important;
+}
+
 
 .output-entry-attachments {
   display: grid;
@@ -875,90 +980,142 @@ defineExpose({ panelEl });
   content: '';
 }
 
-.output-round {
-  margin: 8px 0;
-  padding: 12px;
-  border: 1px solid var(--border-color, #333);
-  border-radius: 8px;
-  background: var(--bg-secondary, #1a1a1a);
+/* === Nested Box Design === */
+
+.info-block {
+  background: rgba(2, 6, 23, 0.6);
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
 }
 
-.round-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border-color, #333);
+.ib-user-box {
+  border-left: 3px solid; /* color via inline style from getUserBoxStyle */
+  padding-left: 8px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
-.round-header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.round-header-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.round-meta {
-  font-size: 12px;
-  color: var(--text-secondary, #888);
-}
-
-.round-messages {
+.ib-msg-block {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
 }
 
-.round-msg {
+.ib-msg-user {
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.ib-msg-assistant {
+  margin-top: 4px;
+}
+
+.ib-response-area {
   display: flex;
-  gap: 8px;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
 }
 
-.round-msg-indicator {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-top: 6px;
-  flex-shrink: 0;
+.ib-sender {
+  font-size: 10px;
+  font-weight: 600;
+  margin-bottom: 2px;
+  /* Color set via inline style */
 }
 
-.round-msg-indicator-user {
-  background-color: #4a9eff; /* blue for user */
+.ib-msg-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  --message-line-height: 1.2;
+  line-height: var(--message-line-height);
+  padding-top: 3px;
+  padding-left: 6px;
 }
 
-.round-msg-indicator-assistant {
-  background-color: #4ade80; /* green for assistant */
-}
-
-.round-msg-content {
-  flex: 1;
+.ib-footer-meta {
+  font-size: 10px;
+  color: rgba(148, 163, 184, 0.7);
+  flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.round-footer {
+/* Fork button: top-right of info-block */
+.ib-top-right {
+  float: right;
+  margin: -2px -2px 4px 8px;
+}
+
+/* Footer: meta left, actions right */
+.ib-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 12px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-color, #333);
-}
-
-.round-footer-left {
-  display: flex;
-  align-items: center;
-}
-
-.round-footer-right {
-  display: flex;
-  align-items: center;
   gap: 8px;
+  margin-top: 6px;
 }
+
+.ib-footer-actions {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.ib-action {
+  border: 1px solid rgba(148, 163, 184, 0.65);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.75);
+  color: #bfdbfe;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ib-action:hover {
+  background: rgba(30, 41, 59, 0.92);
+}
+
+.ib-action-diff {
+  border-color: rgba(96, 165, 250, 0.7);
+  background: rgba(30, 58, 138, 0.35);
+  color: #bfdbfe;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.ib-action-diff:hover {
+  background: rgba(30, 64, 175, 0.55);
+}
+
+.ib-action-danger {
+  border-color: rgba(248, 113, 113, 0.7);
+  background: rgba(127, 29, 29, 0.35);
+  color: #fecaca;
+}
+
+.ib-action-danger:hover {
+  background: rgba(153, 27, 27, 0.5);
+}
+
+/* Fade transition for message changes */
+.ib-fade-enter-active,
+.ib-fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+
+.ib-fade-enter-from,
+.ib-fade-leave-to {
+  opacity: 0;
+}
+
 </style>

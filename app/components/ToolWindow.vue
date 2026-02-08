@@ -42,7 +42,22 @@
         :patch="entry.content"
         :lang="entry.toolLang ?? 'diff'"
         :theme="theme"
+        @rendered="onRendered"
       />
+      <Transition v-else-if="entry.contentKey" name="tw-fade" mode="out-in">
+        <MessageViewer
+          :key="entry.contentKey"
+          :code="renderCode"
+          :lang="viewerLang"
+          :theme="theme"
+          :wrap-mode="viewerWrapMode"
+          :gutter-mode="viewerGutterMode"
+          :gutter-lines="viewerGutterLines"
+          :grep-pattern="viewerGrepPattern"
+          :is-message="entry.isMessage"
+          @rendered="onRendered"
+        />
+      </Transition>
       <MessageViewer
         v-else
         :code="renderCode"
@@ -106,6 +121,7 @@ type ToolWindowEntry = {
   messageAgent?: string;
   messageModel?: string;
   callId?: string;
+  contentKey?: string;
   zIndex?: number;
   width?: number;
   height?: number;
@@ -265,6 +281,7 @@ function onRendered() {
   background: #1a1d24;
   color: #f3f4f6;
   border: 1px solid #3a4150;
+  border-radius: 5px;
   overflow: hidden;
   font-family: var(--term-font-family);
   line-height: var(--term-line-height);
@@ -459,7 +476,8 @@ function onRendered() {
   display: block;
 }
 
-.term-inner.is-scrolling .shiki-host {
+.term-inner.is-scrolling .shiki-host,
+.term-inner.is-scrolling .diff-viewer {
   animation: scroll-down var(--scroll-duration) linear forwards;
   will-change: transform;
 }
@@ -471,5 +489,15 @@ function onRendered() {
   to {
     transform: translateY(calc(-1 * var(--scroll-distance)));
   }
+}
+
+.tw-fade-enter-active,
+.tw-fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+
+.tw-fade-enter-from,
+.tw-fade-leave-to {
+  opacity: 0;
 }
 </style>

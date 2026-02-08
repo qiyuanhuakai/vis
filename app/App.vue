@@ -271,6 +271,7 @@ type FileReadEntry = {
   diffLang?: string;
   diffTabs?: Array<{ file: string; before: string; after: string }>;
   classification?: 'real_user' | 'system_injection' | 'unknown';
+  contentKey?: string;
   isRound?: boolean;
   roundId?: string;
   roundMessages?: RoundMessage[];
@@ -8334,6 +8335,7 @@ function connect() {
         lastReasoningMessageIdByKey.set(messageKey, reasoningMessageId);
       }
       let mergedContent = message.content;
+      let contentKey: string | undefined;
       if (isSessionWindow && message.messageId) {
         const partMap = messagePartsById.get(messageKey) ?? new Map<string, string>();
         partMap.set(message.messageId, message.content);
@@ -8341,7 +8343,9 @@ function connect() {
         const order = messagePartOrderById.get(messageKey) ?? [];
         if (!order.includes(message.messageId)) order.push(message.messageId);
         messagePartOrderById.set(messageKey, order);
-        mergedContent = order.map((key) => partMap.get(key) ?? '').filter(Boolean).join('\n\n---\n\n');
+        const lastKey = order[order.length - 1];
+        mergedContent = lastKey ? (partMap.get(lastKey) ?? '') : '';
+        contentKey = lastKey;
       } else if (message.partId && message.messageId) {
         const partMap = messagePartsById.get(messageKey) ?? new Map<string, string>();
         partMap.set(message.partId, message.content);
@@ -8559,6 +8563,7 @@ function connect() {
             isReasoning,
             messageKey,
             follow: existing.follow ?? (isFloatingMessage ? true : undefined),
+            contentKey: contentKey ?? existing.contentKey,
           });
           messageIndexById.set(messageKey, existingIndex);
         }
@@ -8596,6 +8601,7 @@ function connect() {
         isReasoning,
         messageId: stableMessageId,
         messageKey,
+        contentKey,
         follow: isFloatingMessage ? true : undefined,
         sessionId,
         zIndex: isFloatingMessage ? nextWindowZ() : undefined,

@@ -14,7 +14,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, reactive, watch } from 'vue';
+import { nextTick, onBeforeUnmount, reactive, toRaw, watch } from 'vue';
 import { renderWorkerHtml } from '../utils/workerRenderer';
 
 const props = defineProps<{
@@ -54,7 +54,7 @@ async function startRender() {
     lang: props.lang,
     theme: props.theme,
     gutterMode: props.gutterMode ?? 'none',
-    gutterLines: props.gutterLines,
+    gutterLines: props.gutterLines ? toRaw(props.gutterLines) : undefined,
     grepPattern: props.grepPattern,
   })
     .then((html) => {
