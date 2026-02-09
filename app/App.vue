@@ -1110,19 +1110,7 @@ function resolveProjectIdForSession(sessionId: string) {
   return '';
 }
 
-function resolveProjectIdForDirectory(directory?: string) {
-  const normalized = normalizeDirectory(directory?.trim() ?? '');
-  if (!normalized) return '';
-  const matched = projects.value.find((project) => {
-    const candidates = projectSessionDirectories(project);
-    return candidates.some((entry) => normalizeDirectory(entry) === normalized);
-  });
-  if (matched?.id) return matched.id;
-  const baseMatch = projects.value.find(
-    (project) => normalizeDirectory(projectBaseDirectory(project)) === normalized,
-  );
-  return baseMatch?.id ?? '';
-}
+
 
 function clearComposerInputState() {
   messageInput.value = '';
@@ -1409,17 +1397,41 @@ function deleteSessionStatus(sessionId: string, projectId?: string) {
   sessionStatusVersion.value += 1;
 }
 
-function mergeSessionStatusesIfMissing(entries: [string, SessionStatusType][], projectId?: string) {
-  if (entries.length === 0) return;
+/**
+ * Sync local session statuses with the API response.
+ * - For sessions unknown locally (no entry): set the status from the API (busy/idle/retry).
+ * - For sessions that are locally busy/retry but NOT present in the API response: demote to idle.
+ * The API only returns busy sessions, so absence means the session is idle.
+ */
+function syncSessionStatuses(entries: [string, SessionStatusType][], projectId?: string) {
+  if (!projectId) return;
+  const apiBusyKeys = new Set<string>();
   let didUpdate = false;
+
+  // Apply API entries: merge missing, and collect keys reported as busy
   entries.forEach(([sessionId, status]) => {
     if (!sessionId) return;
     const key = buildSessionStatusKeyForSession(sessionId, projectId);
     if (!key) return;
-    if (sessionStatusByKey.has(key)) return;
-    sessionStatusByKey.set(key, status);
+    apiBusyKeys.add(key);
+    const current = sessionStatusByKey.get(key);
+    if (current === undefined) {
+      sessionStatusByKey.set(key, status);
+      didUpdate = true;
+    }
+  });
+
+  // Demote locally busy/retry sessions that are NOT in the API response to idle.
+  // The API only returns busy sessions, so absence means idle.
+  const prefix = `${projectId}:`;
+  sessionStatusByKey.forEach((status, key) => {
+    if (!key.startsWith(prefix)) return;
+    if (status !== 'busy' && status !== 'retry') return;
+    if (apiBusyKeys.has(key)) return;
+    sessionStatusByKey.set(key, 'idle');
     didUpdate = true;
   });
+
   if (didUpdate) sessionStatusVersion.value += 1;
 }
 
@@ -2740,6 +2752,11 @@ async function fetchCommands(directory?: string) {
   }
 }
 
+/**
+ * Fetch session statuses from the API and fully sync local state.
+ * Fills unknown entries AND demotes locally-busy sessions to idle
+ * when they are absent from the API response.
+ */
 async function fetchSessionStatus(directory?: string) {
   const requestId = ++sessionStatusRequestId;
   const directoryAtRequest = directory ?? '';
@@ -2750,7 +2767,6 @@ async function fetchSessionStatus(directory?: string) {
     )) as Record<string, { type?: string }>;
     if (requestId !== sessionStatusRequestId) return;
     if (directoryAtRequest !== (activeDirectory.value || '')) return;
-    const resolvedProjectId = resolveProjectIdForDirectory(directoryAtRequest);
     const nextEntries: [string, SessionStatusType][] = [];
     Object.entries(data ?? {}).forEach(([sessionId, status]) => {
       const type = typeof status?.type === 'string' ? status.type : '';
@@ -2760,7 +2776,7 @@ async function fetchSessionStatus(directory?: string) {
         nextEntries.push([sessionId, 'retry']);
       }
     });
-    mergeSessionStatusesIfMissing(nextEntries, resolvedProjectId);
+    syncSessionStatuses(nextEntries, selectedProjectId.value);
     if (selectedSessionId.value) {
       const nextStatus = getSessionStatus(selectedSessionId.value);
       if (nextStatus !== 'retry') {
@@ -2768,7 +2784,7 @@ async function fetchSessionStatus(directory?: string) {
       }
     }
   } catch (error) {
-    log('Session status load failed', error);
+    log('Session status sync failed', error);
   }
 }
 
@@ -8317,6 +8333,95 @@ function extractSummaryDiffs(info: Record<string, unknown> | undefined): Array<M
   return result;
 }
 
+function upsertPrimaryAssistantIntoRound(
+  sessionId: string,
+  messageId: string,
+  content: string,
+  meta?: {
+    agent?: string;
+    model?: string;
+    providerId?: string;
+    modelId?: string;
+    variant?: string;
+    time?: number;
+    usage?: MessageUsage;
+    attachments?: Array<{ name: string; url: string; mediaType?: string }>;
+  },
+) {
+  // Find the last round for this session
+  let targetRoundIndex = -1;
+  let targetRound: (typeof queue.value)[number] | undefined;
+  for (let i = queue.value.length - 1; i >= 0; i--) {
+    const entry = queue.value[i];
+    if (entry?.isRound && entry.sessionId === sessionId) {
+      targetRoundIndex = i;
+      targetRound = entry;
+      break;
+    }
+  }
+  if (!targetRound || targetRoundIndex < 0) return;
+
+  const roundId = targetRound.roundId ?? targetRound.messageId;
+  if (!roundId) return;
+  const roundMessageKey = buildMessageKey(roundId, sessionId);
+  const assistantMessageKey = buildMessageKey(messageId, sessionId);
+
+  // Inherit agent/model from the round's user message as fallback
+  const roundAgent = targetRound.messageAgent;
+  const roundModel = targetRound.messageModel;
+  const roundProviderId = targetRound.messageProviderId;
+  const roundModelId = targetRound.messageModelId;
+  const roundVariant = targetRound.messageVariant;
+
+  const existingRoundMessages = targetRound.roundMessages ?? [];
+  const exactIndex = existingRoundMessages.findIndex((e) => e.messageId === messageId);
+  const currentEntry = exactIndex >= 0 ? existingRoundMessages[exactIndex] : undefined;
+
+  const roundMessage: RoundMessage = {
+    messageId,
+    role: 'assistant',
+    content,
+    attachments: meta?.attachments ?? currentEntry?.attachments,
+    agent: meta?.agent ?? currentEntry?.agent ?? roundAgent,
+    model: meta?.model ?? currentEntry?.model ?? roundModel,
+    providerId: meta?.providerId ?? currentEntry?.providerId ?? roundProviderId,
+    modelId: meta?.modelId ?? currentEntry?.modelId ?? roundModelId,
+    variant: meta?.variant ?? currentEntry?.variant ?? roundVariant,
+    time: meta?.time ?? currentEntry?.time,
+    usage: meta?.usage ?? currentEntry?.usage,
+  };
+
+  const nextRoundMessages = [...existingRoundMessages];
+  if (exactIndex >= 0) {
+    // Same messageId — update in place (streaming content update)
+    nextRoundMessages.splice(exactIndex, 1, roundMessage);
+  } else {
+    // New messageId — replace last assistant entry (fade transition)
+    let lastAssistantIdx = -1;
+    for (let i = nextRoundMessages.length - 1; i >= 0; i--) {
+      if (nextRoundMessages[i]?.role === 'assistant') { lastAssistantIdx = i; break; }
+    }
+    if (lastAssistantIdx >= 0) {
+      nextRoundMessages.splice(lastAssistantIdx, 1, roundMessage);
+    } else {
+      nextRoundMessages.push(roundMessage);
+    }
+  }
+
+  queue.value.splice(targetRoundIndex, 1, {
+    ...targetRound,
+    time: Date.now(),
+    roundMessages: nextRoundMessages,
+  });
+  messageIndexById.set(roundMessageKey, targetRoundIndex);
+  messageIndexById.set(assistantMessageKey, targetRoundIndex);
+  messageContentById.set(assistantMessageKey, content);
+  if (meta?.attachments && meta.attachments.length > 0) {
+    messageAttachmentsById.set(assistantMessageKey, meta.attachments);
+  }
+  scheduleFollowScroll();
+}
+
 function promoteFinalAnswerToOutputPanel(
   messageFinish: { finish: string; sessionId?: string; messageId?: string; parentID?: string },
   fallbackSessionId?: string,
@@ -8327,12 +8432,12 @@ function promoteFinalAnswerToOutputPanel(
   if (resolvedSessionId !== selectedSessionId.value) return;
   const sessionWindowId = `session:${resolvedSessionId}`;
   const sessionWindowKey = buildMessageKey(sessionWindowId, resolvedSessionId);
-  const content = messageContentById.get(sessionWindowKey);
+  const finalMessageId = messageFinish.messageId ?? sessionWindowId;
+  const finalMessageKey = buildMessageKey(finalMessageId, resolvedSessionId);
+  const content = messageContentById.get(finalMessageKey) ?? messageContentById.get(sessionWindowKey);
   if (!content || !content.trim()) return;
 
   // Build a stable key for this final answer using the actual message ID
-  const finalMessageId = messageFinish.messageId ?? sessionWindowId;
-  const finalMessageKey = buildMessageKey(finalMessageId, resolvedSessionId);
   // Avoid duplicates — if this final answer is already in the OutputPanel, skip
   if (messageIndexById.has(finalMessageKey)) return;
   const roundId = messageFinish.parentID ?? finalMessageId;
@@ -8352,9 +8457,15 @@ function promoteFinalAnswerToOutputPanel(
     overflowLines > 0 ? Math.min(0.25, Math.max(0.08, overflowLines * 0.01)) : 0;
   const attachments = messageAttachmentsById.get(sessionWindowKey) ?? messageAttachmentsById.get(finalMessageKey);
 
-  // Inherit agent/model display from the session window entry if it exists
+  // Inherit agent/model display from an existing transient entry if it exists
   const sessionWindowIndex = messageIndexById.get(sessionWindowKey);
-  const sessionWindowEntry = sessionWindowIndex !== undefined ? queue.value[sessionWindowIndex] : undefined;
+  const finalMessageIndex = messageIndexById.get(finalMessageKey);
+  const sessionWindowEntry =
+    finalMessageIndex !== undefined
+      ? queue.value[finalMessageIndex]
+      : sessionWindowIndex !== undefined
+        ? queue.value[sessionWindowIndex]
+        : undefined;
   const newSubMessage: RoundMessage = {
     messageId: finalMessageId,
     role: 'assistant',
@@ -8518,37 +8629,26 @@ function applySessionStatusEvent(payload: unknown, eventType: string) {
   if (!sessionStatus) return;
 
   const sessionId = extractSessionId(payload);
-  const eventDirectory = extractEventDirectory(payload);
-  const projectIdFromDirectory = eventDirectory ? resolveProjectIdForDirectory(eventDirectory) : '';
-  const projectId =
-    projectIdFromDirectory || (sessionId ? resolveProjectIdForStatus(sessionId, undefined) : '');
-  const isSelectedSessionEvent = Boolean(
-    sessionId && selectedSessionId.value && sessionId === selectedSessionId.value,
-  );
-  const isAllowedSessionEvent = Boolean(
-    sessionId && selectedSessionId.value && allowedSessionIds.value.has(sessionId),
-  );
+  if (!sessionId || !allowedSessionIds.value.has(sessionId)) return;
+
+  const projectId = selectedProjectId.value;
+  if (!projectId) return;
+
+  const isSelectedSession = sessionId === selectedSessionId.value;
 
   if (sessionStatus.status === 'busy' || sessionStatus.status === 'idle') {
     const nextStatus = sessionStatus.status as SessionStatusType;
-    if (sessionId) setSessionStatus(sessionId, nextStatus, projectId);
-    if (isSelectedSessionEvent && sessionId) {
-      retryStatus.value = null;
-      updateSubagentExpiry(sessionId, nextStatus);
-      updateReasoningExpiry(sessionId, nextStatus);
-    } else if (isAllowedSessionEvent && sessionId) {
-      updateSubagentExpiry(sessionId, nextStatus);
-      updateReasoningExpiry(sessionId, nextStatus);
-    }
+    setSessionStatus(sessionId, nextStatus, projectId);
+    if (isSelectedSession) retryStatus.value = null;
+    updateSubagentExpiry(sessionId, nextStatus);
+    updateReasoningExpiry(sessionId, nextStatus);
     return;
   }
 
   if (sessionStatus.status !== 'retry') return;
 
-  if (sessionId) {
-    setSessionStatus(sessionId, 'retry', projectId);
-  }
-  if (!isSelectedSessionEvent || !sessionId) return;
+  setSessionStatus(sessionId, 'retry', projectId);
+  if (!isSelectedSession) return;
 
   updateReasoningExpiry(sessionId, 'busy');
   if (sessionStatus.message && typeof sessionStatus.next === 'number') {
@@ -9805,6 +9905,12 @@ function connect() {
       }
       if (messageFinish.finish === 'stop') {
         promoteFinalAnswerToOutputPanel(messageFinish, sessionId);
+        // After a full response completes for the selected session,
+        // sync statuses with the API to recover from any missed SSE events.
+        const finishSessionId = messageFinish.sessionId ?? sessionId;
+        if (finishSessionId === selectedSessionId.value) {
+          void fetchSessionStatus(activeDirectory.value || undefined);
+        }
       }
     }
 
@@ -9899,7 +10005,11 @@ function connect() {
             : undefined;
         return typeof info?.parentID === 'string' ? (info.parentID as string) : undefined;
       })();
+      const isPrimarySession = Boolean(
+        sessionId && selectedSessionId.value && sessionId === selectedSessionId.value,
+      );
       const isSessionWindow = !isReasoning && !isUserMessage;
+      const isPrimarySessionWindow = isSessionWindow && isPrimarySession;
       const stableMessageId = isReasoning
         ? `reasoning:${reasoningKey}`
         : isSessionWindow
@@ -10018,6 +10128,23 @@ function connect() {
           ? getSubagentExpiry(sessionId)
           : time + 1000 * 60 * 30;
       const attachments = messageAttachmentsById.get(messageKey);
+
+      // Primary session assistant → route to round in real time (not floating window)
+      if (isPrimarySessionWindow && sessionId) {
+        const resolvedMessageId = contentKey ?? message.messageId ?? stableMessageId;
+        upsertPrimaryAssistantIntoRound(sessionId, resolvedMessageId, mergedContent, {
+          agent: displayMeta?.agent,
+          model: displayMeta?.model,
+          providerId: resolvedMeta?.providerId,
+          modelId: resolvedMeta?.modelId,
+          variant: displayMeta?.variant,
+          time: resolvedTime,
+          usage: messageUsageByKey.get(messageKey),
+          attachments: attachments ? [...attachments] : undefined,
+        });
+        messageContentById.set(messageKey, mergedContent);
+        return;
+      }
 
       if (
         isUserMessage &&
