@@ -5494,6 +5494,11 @@ setInterval(() => {
   messageContentById.clear();
   const survivingParts = new Map<string, Map<string, string>>();
   const survivingPartOrder = new Map<string, string[]>();
+  const survivingUsage = new Map<string, MessageUsage>();
+  const survivingAttachments = new Map<string, MessageAttachment[]>();
+  const survivingDiffs = new Map<string, Array<MessageDiffEntry>>();
+  const survivingSummaryTitles = new Map<string, string>();
+  const survivingSessionIds = new Set<string>();
   runningToolIds.clear();
   queue.value = queue.value.filter((entry) => {
     if (entry.isMessage) {
@@ -5504,6 +5509,7 @@ setInterval(() => {
     return entry.expiresAt > now;
   });
   queue.value.forEach((entry, index) => {
+    if (entry.sessionId) survivingSessionIds.add(entry.sessionId);
     if (entry.messageId) {
       const messageKey = buildMessageKey(entry.messageId, entry.sessionId);
       messageIndexById.set(messageKey, index);
@@ -5523,13 +5529,33 @@ setInterval(() => {
       const existingOrder = messagePartOrderById.get(messageKey);
       if (existingParts) survivingParts.set(messageKey, existingParts);
       if (existingOrder) survivingPartOrder.set(messageKey, existingOrder);
+      const existingUsage = messageUsageByKey.get(messageKey);
+      if (existingUsage) survivingUsage.set(messageKey, existingUsage);
+      const existingAttachments = messageAttachmentsById.get(messageKey);
+      if (existingAttachments) survivingAttachments.set(messageKey, existingAttachments);
+      const existingDiffs = messageDiffsByKey.get(messageKey);
+      if (existingDiffs) survivingDiffs.set(messageKey, existingDiffs);
+      const existingTitle = messageSummaryTitleById.get(messageKey);
+      if (existingTitle !== undefined) survivingSummaryTitles.set(messageKey, existingTitle);
     }
     if (entry.callId && entry.toolStatus === 'running') runningToolIds.add(entry.callId);
   });
   messagePartsById.clear();
   messagePartOrderById.clear();
+  messageUsageByKey.clear();
+  messageAttachmentsById.clear();
+  messageDiffsByKey.clear();
+  messageSummaryTitleById.clear();
   survivingParts.forEach((parts, key) => messagePartsById.set(key, parts));
   survivingPartOrder.forEach((order, key) => messagePartOrderById.set(key, order));
+  survivingUsage.forEach((usage, key) => messageUsageByKey.set(key, usage));
+  survivingAttachments.forEach((attachments, key) => messageAttachmentsById.set(key, attachments));
+  survivingDiffs.forEach((diffs, key) => messageDiffsByKey.set(key, diffs));
+  survivingSummaryTitles.forEach((title, key) => messageSummaryTitleById.set(key, title));
+  // Prune subagentSessionExpiry for sessions no longer in the queue
+  subagentSessionExpiry.forEach((_, sessionId) => {
+    if (!survivingSessionIds.has(sessionId)) subagentSessionExpiry.delete(sessionId);
+  });
 }, 100);
 
 watch(
