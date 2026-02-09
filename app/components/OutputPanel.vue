@@ -69,6 +69,13 @@
                             @rendered="handleMessageRendered"
                           />
                         </div>
+                        <button
+                          v-if="group.messages.length > 1"
+                          type="button"
+                          class="ib-action ib-action-history"
+                          :title="`${group.messages.length} messages – click to view history`"
+                          @click="showGroupHistory(q, group)"
+                        >^ {{ group.messages.length }}</button>
                       </div>
                     </Transition>
                   </template>
@@ -283,6 +290,7 @@ const emit = defineEmits<{
   (event: 'fork-message', payload: { sessionId: string; messageId: string }): void;
   (event: 'revert-message', payload: { sessionId: string; messageId: string }): void;
   (event: 'show-message-diff', payload: { messageKey: string; diffs: Array<{ file: string; diff: string; before?: string; after?: string }> }): void;
+  (event: 'show-message-history', payload: { roundId: string; contents: string[] }): void;
 }>();
 
 const filteredQueue = computed(() => 
@@ -342,6 +350,13 @@ function formatRoundFooterMeta(entry: FileReadEntry): string {
   const elapsed = formatRoundElapsed(entry);
   if (elapsed) parts.push(elapsed);
   return parts.join(', ');
+}
+
+function showGroupHistory(entry: FileReadEntry, group: MessageGroup) {
+  const roundId = entry.roundId ?? entry.messageKey ?? String(entry.time);
+  const contents = group.messages.map((msg) => msg.content).filter(Boolean);
+  if (contents.length === 0) return;
+  emit('show-message-history', { roundId, contents });
 }
 
 function showRoundDiff(entry: FileReadEntry) {
@@ -1130,6 +1145,20 @@ defineExpose({ panelEl });
 
 .ib-action-danger:hover {
   background: rgba(153, 27, 27, 0.5);
+}
+
+.ib-action-history {
+  border-color: rgba(148, 163, 184, 0.5);
+  background: rgba(30, 41, 59, 0.35);
+  color: #94a3b8;
+  font-size: 10px;
+  margin-top: 4px;
+  align-self: flex-end;
+}
+
+.ib-action-history:hover {
+  background: rgba(51, 65, 85, 0.55);
+  color: #cbd5e1;
 }
 
 /* Fade transition for message changes */

@@ -44,6 +44,7 @@
               @fork-message="handleForkMessage"
               @revert-message="handleRevertMessage"
               @show-message-diff="handleShowMessageDiff"
+              @show-message-history="handleShowMessageHistory"
             />
             <SidePanel
               class="todo-panel"
@@ -7178,6 +7179,46 @@ function handleShowMessageDiff(payload: { messageKey: string; diffs: Array<Messa
   };
   bringToFront(diffEntry);
   fileViewerQueue.value.push(diffEntry);
+}
+
+function handleShowMessageHistory(payload: { roundId: string; contents: string[] }) {
+  const { roundId, contents } = payload;
+  if (!contents || contents.length === 0) return;
+  const toolKey = `message-history:${roundId}`;
+  // Remove existing popup for this round (re-create to pick up new messages)
+  const existingIndex = fileViewerQueue.value.findIndex((item) => item.toolKey === toolKey);
+  if (existingIndex !== -1) {
+    fileViewerQueue.value.splice(existingIndex, 1);
+  }
+  const combinedMarkdown = contents.join('\n\n---\n\n');
+  const metrics = getCanvasMetrics();
+  const x = metrics ? clamp(metrics.canvasRect.width * 0.16, 16, Math.max(16, metrics.canvasRect.width - FILE_VIEWER_WINDOW_WIDTH - 16)) : 24;
+  const y = metrics ? clamp(metrics.toolAreaHeight * 0.1, 16, Math.max(16, metrics.toolAreaHeight - FILE_VIEWER_WINDOW_HEIGHT - 16)) : 24;
+  const historyEntry: FileReadEntry = {
+    time: Date.now(),
+    expiresAt: Number.MAX_SAFE_INTEGER,
+    x,
+    y,
+    header: '',
+    content: combinedMarkdown,
+    scroll: false,
+    scrollDistance: 0,
+    scrollDuration: 0,
+    html: '',
+    isWrite: false,
+    isMessage: true,
+    toolName: 'history',
+    toolTitle: `Message History (${contents.length})`,
+    toolLang: 'markdown',
+    toolKey,
+    toolWrapMode: 'soft',
+    toolGutterMode: 'none',
+    width: FILE_VIEWER_WINDOW_WIDTH,
+    height: FILE_VIEWER_WINDOW_HEIGHT,
+    contentKey: `history-${roundId}-${contents.length}`,
+  };
+  bringToFront(historyEntry);
+  fileViewerQueue.value.push(historyEntry);
 }
 
 async function openFileViewer(path: string) {
