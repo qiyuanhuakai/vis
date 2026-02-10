@@ -15,6 +15,7 @@ const emit = defineEmits<{
   close: [key: string];
 }>();
 
+const windowEl = ref<HTMLElement>();
 const bodyEl = ref<HTMLElement>();
 
 const scrollMode = computed<ScrollMode>(() => props.entry.scroll || 'manual');
@@ -70,8 +71,7 @@ provide(FLOATING_WINDOW_KEY, api);
 const windowStyle = computed(() => {
   const color = props.entry.color || '#3a4150';
   return {
-    left: `${props.entry.x}px`,
-    top: `${props.entry.y}px`,
+    transform: `translate3d(${props.entry.x}px, ${props.entry.y}px, 0)`,
     width: props.entry.width ? `${props.entry.width}px` : '600px',
     height: props.entry.height ? `${props.entry.height}px` : '400px',
     zIndex: props.entry.zIndex,
@@ -93,10 +93,22 @@ function onClose() {
   emit('close', props.entry.key);
 }
 
-// Drag handling — incremental delta with rubber-band + snap-back
+// Drag handling — direct DOM manipulation to avoid triggering Vue restyle
+// During drag, we bypass Vue reactivity entirely and sync back on drag end.
 let lastPointerX = 0;
 let lastPointerY = 0;
 let snapAnimId: number | null = null;
+
+// Non-reactive drag position (avoids Vue overhead during drag)
+let dragX = 0;
+let dragY = 0;
+let dragTarget: HTMLElement | null = null;
+let dragPointerId = -1;
+
+function applyTransform(x: number, y: number) {
+  const el = windowEl.value;
+  if (el) el.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+}
 
 function cancelSnapAnimation() {
   if (snapAnimId !== null) {
@@ -113,12 +125,21 @@ function getDragBounds() {
 }
 
 function onDragStart(e: PointerEvent) {
+  if ((e.target as HTMLElement).closest('.close-btn')) return;
   e.preventDefault();
   cancelSnapAnimation();
+
+  dragTarget = e.currentTarget as HTMLElement;
+  dragTarget.setPointerCapture(e.pointerId);
+  dragPointerId = e.pointerId;
+
   lastPointerX = e.clientX;
   lastPointerY = e.clientY;
-  window.addEventListener('pointermove', onDragMove);
-  window.addEventListener('pointerup', onDragEnd);
+  dragX = props.entry.x;
+  dragY = props.entry.y;
+
+  dragTarget.addEventListener('pointermove', onDragMove);
+  dragTarget.addEventListener('pointerup', onDragEnd);
 }
 
 function onDragMove(e: PointerEvent) {
@@ -127,22 +148,37 @@ function onDragMove(e: PointerEvent) {
   lastPointerX = e.clientX;
   lastPointerY = e.clientY;
   const { minX, maxX, minY, maxY } = getDragBounds();
-  const x = props.entry.x;
-  const y = props.entry.y;
-  props.entry.x += dx * (x < minX || x > maxX ? 0.5 : 1);
-  props.entry.y += dy * (y < minY || y > maxY ? 0.5 : 1);
+  dragX += dx * (dragX < minX || dragX > maxX ? 0.5 : 1);
+  dragY += dy * (dragY < minY || dragY > maxY ? 0.5 : 1);
+
+  // Direct DOM update — bypasses Vue reactivity and restyle cascade
+  applyTransform(dragX, dragY);
+}
+
+function cleanupDrag() {
+  if (dragTarget) {
+    dragTarget.removeEventListener('pointermove', onDragMove);
+    dragTarget.removeEventListener('pointerup', onDragEnd);
+    if (dragPointerId >= 0) {
+      dragTarget.releasePointerCapture(dragPointerId);
+    }
+    dragTarget = null;
+    dragPointerId = -1;
+  }
 }
 
 function onDragEnd() {
-  window.removeEventListener('pointermove', onDragMove);
-  window.removeEventListener('pointerup', onDragEnd);
+  cleanupDrag();
+  // Sync final position to Vue reactive state (single restyle)
+  props.entry.x = dragX;
+  props.entry.y = dragY;
   snapBack();
 }
 
 function snapBack() {
   const { minX, maxX, minY, maxY, w, h, extent } = getDragBounds();
-  const x = props.entry.x;
-  const y = props.entry.y;
+  const x = dragX;
+  const y = dragY;
   if (x >= minX && x <= maxX && y >= minY && y <= maxY) return;
 
   const cx = extent.width / 2 - w / 2;
@@ -181,11 +217,15 @@ function snapBack() {
   function frame(now: number) {
     const progress = Math.min((now - startTime) / duration, 1);
     const ease = 1 - (1 - progress) * (1 - progress) * (1 - progress);
-    props.entry.x = startX + (finalX - startX) * ease;
-    props.entry.y = startY + (finalY - startY) * ease;
+    dragX = startX + (finalX - startX) * ease;
+    dragY = startY + (finalY - startY) * ease;
+    applyTransform(dragX, dragY);
     if (progress < 1) {
       snapAnimId = requestAnimationFrame(frame);
     } else {
+      // Sync final position to Vue reactive state
+      props.entry.x = dragX;
+      props.entry.y = dragY;
       snapAnimId = null;
     }
   }
@@ -195,8 +235,7 @@ function snapBack() {
 
 onBeforeUnmount(() => {
   cancelSnapAnimation();
-  window.removeEventListener('pointermove', onDragMove);
-  window.removeEventListener('pointerup', onDragEnd);
+  cleanupDrag();
 });
 
 // Resize handling
@@ -239,6 +278,7 @@ function onResizeEnd(e: PointerEvent) {
 
 <template>
   <div 
+    ref="windowEl"
     class="floating-window" 
     :style="windowStyle" 
     @pointerdown.capture="onFocus"
@@ -285,6 +325,10 @@ function onResizeEnd(e: PointerEvent) {
 <style scoped>
 .floating-window {
   position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+  contain: layout paint;
   display: flex;
   flex-direction: column;
   background: color-mix(in srgb, var(--window-color, #3a4150) 12%, #1a1d24);
@@ -347,30 +391,29 @@ function onResizeEnd(e: PointerEvent) {
   height: 100%;
   overflow: auto;
   padding: 2px 4px;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
 }
 
 .floating-window-body::-webkit-scrollbar {
-  display: none;
-}
-
-.floating-window:hover .floating-window-body {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
-}
-
-.floating-window:hover .floating-window-body::-webkit-scrollbar {
-  display: block;
   width: 6px;
 }
 
-.floating-window:hover .floating-window-body::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+.floating-window-body::-webkit-scrollbar-thumb {
+  background: transparent;
   border-radius: 3px;
 }
 
-.floating-window:hover .floating-window-body::-webkit-scrollbar-track {
+.floating-window-body::-webkit-scrollbar-track {
   background: transparent;
+}
+
+.floating-window-body:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.floating-window-body:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
 }
 
 .floating-window-body.scroll-none {
