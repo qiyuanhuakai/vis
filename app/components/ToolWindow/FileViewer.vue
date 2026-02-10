@@ -25,10 +25,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, inject } from 'vue';
+import { computed, ref } from 'vue';
 import CodeContent from '../CodeContent.vue';
 import { type CodeRenderParams, useCodeRender } from '../../utils/useCodeRender';
-import { FLOATING_WINDOW_KEY, type FloatingWindowAPI } from '../../composables/useFloatingWindow';
 
 const props = defineProps<{
   path?: string;
@@ -45,8 +44,6 @@ const props = defineProps<{
   gutterMode?: 'default' | 'none' | 'grep-source';
   theme?: string;
 }>();
-
-const fw = inject<FloatingWindowAPI>(FLOATING_WINDOW_KEY);
 
 const activeTabIndex = ref(0);
 

@@ -153,8 +153,8 @@ import TaskContent from './components/ToolWindow/Task.vue';
 import DefaultContent from './components/ToolWindow/Default.vue';
 import SidePanel from './components/SidePanel.vue';
 import TopPanel from './components/TopPanel.vue';
-import PermissionWindow from './components/PermissionWindow.vue';
-import QuestionWindow from './components/QuestionWindow.vue';
+import PermissionContent from './components/ToolWindow/Permission.vue';
+import QuestionContent from './components/ToolWindow/Question.vue';
 import FileViewerContent from './components/ToolWindow/FileViewer.vue';
 import ShellContent from './components/ToolWindow/Shell.vue';
 import {
@@ -3805,7 +3805,7 @@ function ensureShellWindow(pty: PtyInfo, sessionId: string, options: { preserve?
     title: pty.title || 'Shell',
     x: randomPosition.x,
     y: randomPosition.y,
-    expiresAt: Number.MAX_SAFE_INTEGER,
+    expiry: Infinity,
     onResize: () => scheduleShellFit(pty.id),
   });
   if (!options.preserve) addShellPtyId(sessionId, pty.id);
@@ -6472,7 +6472,7 @@ function openSessionDiff(path: string) {
     y: pos.y,
     width: FILE_VIEWER_WINDOW_WIDTH,
     height: FILE_VIEWER_WINDOW_HEIGHT,
-    expiresAt: Number.MAX_SAFE_INTEGER,
+    expiry: Infinity,
   });
 }
 
@@ -6526,7 +6526,7 @@ function handleShowMessageDiff(payload: { messageKey: string; diffs: Array<Messa
     y: pos.y,
     width: FILE_VIEWER_WINDOW_WIDTH,
     height: FILE_VIEWER_WINDOW_HEIGHT,
-    expiresAt: Number.MAX_SAFE_INTEGER,
+    expiry: Infinity,
   });
 }
 
@@ -6554,7 +6554,7 @@ function handleShowMessageHistory(payload: { roundId: string; contents: string[]
     y: pos.y,
     width: FILE_VIEWER_WINDOW_WIDTH,
     height: FILE_VIEWER_WINDOW_HEIGHT,
-    expiresAt: Number.MAX_SAFE_INTEGER,
+    expiry: Infinity,
   });
 }
 
@@ -6583,7 +6583,7 @@ async function openFileViewer(path: string) {
     y: pos.y,
     width: FILE_VIEWER_WINDOW_WIDTH,
     height: FILE_VIEWER_WINDOW_HEIGHT,
-    expiresAt: Number.MAX_SAFE_INTEGER,
+    expiry: Infinity,
   });
 
   const directory = activeDirectory.value.trim();
@@ -7131,7 +7131,6 @@ function extractFileRead(payload: unknown, eventType: string) {
       }
       case 'read': {
         if (status === 'running') return null;
-        console.log('READ tool outputText:', outputText, 'from state.output:', state?.output);
         const readPath = resolveReadWritePath(input, metadata, state);
         return {
           component: ReadContent,
@@ -8389,7 +8388,7 @@ function handlePtyEvent(event: {
 function upsertPermissionEntry(request: PermissionRequest) {
   const key = `permission:${request.id}`;
   fw.open(key, {
-    component: PermissionWindow,
+    component: PermissionContent,
     props: {
       request,
       isSubmitting: isPermissionSubmitting(request.id),
@@ -8403,7 +8402,7 @@ function upsertPermissionEntry(request: PermissionRequest) {
     title: `Permission: ${request.permission || 'request'}`,
     width: PERMISSION_WINDOW_WIDTH,
     height: PERMISSION_WINDOW_HEIGHT,
-    expiresAt: Number.MAX_SAFE_INTEGER,
+    expiry: Infinity,
   });
 }
 
@@ -8504,7 +8503,7 @@ async function handlePermissionReply(payload: { requestId: string; reply: Permis
 function upsertQuestionEntry(request: QuestionRequest) {
   const key = `question:${request.id}`;
   fw.open(key, {
-    component: QuestionWindow,
+    component: QuestionContent,
     props: {
       request,
       isSubmitting: isQuestionSubmitting(request.id),
@@ -8519,7 +8518,7 @@ function upsertQuestionEntry(request: QuestionRequest) {
     title: `Question: ${request.questions?.[0]?.header || 'request'}`,
     width: QUESTION_WINDOW_WIDTH,
     height: QUESTION_WINDOW_HEIGHT,
-    expiresAt: Number.MAX_SAFE_INTEGER,
+    expiry: Infinity,
   });
 }
 

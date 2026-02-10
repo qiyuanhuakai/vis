@@ -5,7 +5,7 @@ export interface FloatingWindowEntry {
   key: string;
   component?: Component;
   props?: Record<string, unknown>;
-  content?: string;
+  content?: string | (() => Promise<string>);
   lang?: string;
   title?: string;
   status?: 'running' | 'completed' | 'error';
@@ -21,6 +21,7 @@ export interface FloatingWindowEntry {
   scroll: 'follow' | 'force' | 'manual' | 'none';
   color?: string;
   time: number;
+  expiry?: number;
   expiresAt: number;
   beforeOpen?: () => Promise<void>;
   afterOpen?: (el: HTMLElement) => void;
@@ -77,6 +78,10 @@ function resolveExpiresAt(
 ): number {
   // Explicit expiresAt always wins
   if (typeof opts.expiresAt === 'number') return opts.expiresAt;
+  // expiry: Infinity → permanent, expiry: N → N ms from now
+  if (typeof opts.expiry === 'number') {
+    return opts.expiry === Infinity ? Number.MAX_SAFE_INTEGER : Date.now() + opts.expiry;
+  }
   // Status-based: completed/error always gets short TTL (even if existing had longer)
   const status = opts.status;
   if (status === 'completed' || status === 'error') return Date.now() + TOOL_COMPLETED_TTL_MS;

@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import CodeContent from '../CodeContent.vue';
 import { useCodeRender } from '../../utils/useCodeRender';
-import { guessLanguageFromPath } from './utils';
+import { resolveReadWritePath, resolveReadRange, guessLanguageFromPath } from './utils';
 
 const props = defineProps<{
   input?: Record<string, unknown>;
@@ -31,41 +31,11 @@ function extractFileBodyFromReadOutput(output: string) {
   return contentLines.join('\n');
 }
 
-function resolveReadWritePath(
-  input: Record<string, unknown> | undefined,
-  metadata: Record<string, unknown> | undefined,
-  state: Record<string, unknown> | undefined,
-) {
-  const filePath = typeof input?.filePath === 'string' ? input.filePath.trim() : '';
-  if (filePath) return filePath;
-  const path = typeof input?.path === 'string' ? input.path.trim() : '';
-  if (path) return path;
-  const metadataPath = typeof metadata?.filepath === 'string' ? metadata.filepath.trim() : '';
-  if (metadataPath) return metadataPath;
-  const title = typeof state?.title === 'string' ? state.title.trim() : '';
-  return title || undefined;
-}
-
-function resolveReadRange(input: Record<string, unknown> | undefined) {
-  const offsetValue = input?.offset;
-  const limitValue = input?.limit;
-  const offset =
-    typeof offsetValue === 'number' && Number.isFinite(offsetValue) && offsetValue >= 0
-      ? Math.floor(offsetValue)
-      : undefined;
-  const limit =
-    typeof limitValue === 'number' && Number.isFinite(limitValue) && limitValue > 0
-      ? Math.floor(limitValue)
-      : undefined;
-  return { offset, limit };
-}
-
 const path = computed(() => {
   return resolveReadWritePath(props.input, props.metadata, props.state);
 });
 
 const displayContent = computed(() => {
-  console.log('Read.vue props.output:', props.output);
   if (!props.output) return '';
   return extractFileBodyFromReadOutput(props.output) ?? props.output;
 });
