@@ -1,46 +1,44 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import CodeContent from '../CodeContent.vue';
-import { useCodeRender } from '../../utils/useCodeRender';
+// Bash tool window - displays command and output with terminal styling
+// Pre-rendered HTML is passed via props; no useCodeRender here
 
-const props = defineProps<{
-  input?: Record<string, unknown>;
-  output?: string;
-  error?: string;
-  status?: string;
-  state?: Record<string, unknown>;
+defineProps<{
+  /** Plain text command (not HTML) */
+  command?: string;
+  /** Pre-rendered HTML for the output */
+  outputHtml?: string;
 }>();
-
-function formatBashToolContent(
-  input: Record<string, unknown> | undefined,
-  output: string,
-  status?: string,
-) {
-  const command = typeof input?.command === 'string' ? input.command : '';
-  const lines: string[] = [];
-  if (command.trim()) {
-    lines.push(`$ ${command}`);
-  }
-  if (output.trim()) {
-    if (lines.length > 0) lines.push('');
-    lines.push(output);
-  }
-  if (lines.length === 0 && status === 'running') return '$';
-  return lines.join('\n');
-}
-
-const displayContent = computed(() => {
-  return formatBashToolContent(props.input, props.output ?? props.error ?? '', props.status);
-});
-
-const { html: renderedHtml } = useCodeRender(() => ({
-  code: displayContent.value,
-  lang: 'shellscript',
-  theme: 'github-dark',
-  gutterMode: 'none' as const,
-}));
 </script>
 
 <template>
-  <CodeContent :html="renderedHtml" variant="term" />
+  <div class="bash-content">
+    <div v-if="command" class="bash-command">$ {{ command }}</div>
+    <div v-if="outputHtml" class="bash-output" v-html="outputHtml" />
+    <div v-else-if="!command" class="bash-empty">$</div>
+  </div>
 </template>
+
+<style scoped>
+.bash-content {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.bash-command {
+  color: #a5b4fc;
+}
+
+.bash-output {
+  margin-top: 8px;
+}
+
+.bash-output :deep(.shiki) {
+  background: transparent !important;
+}
+
+.bash-empty {
+  color: #64748b;
+}
+</style>

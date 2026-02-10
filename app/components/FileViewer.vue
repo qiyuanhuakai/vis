@@ -25,8 +25,8 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import CodeContent from '../CodeContent.vue';
-import { type CodeRenderParams, useCodeRender } from '../../utils/useCodeRender';
+import CodeContent from './CodeContent.vue';
+import { type CodeRenderParams, useCodeRender } from '../utils/useCodeRender';
 
 const props = defineProps<{
   path?: string;
@@ -35,7 +35,6 @@ const props = defineProps<{
   lang?: string;
   isBinary?: boolean;
   isDiff?: boolean;
-  isLoading?: boolean;
   diffCode?: string;
   diffAfter?: string;
   diffPatch?: string;
@@ -131,7 +130,14 @@ const renderParams = computed<CodeRenderParams | null>(() => {
 const { html: renderedHtml } = useCodeRender(renderParams);
 
 const showLoading = computed(() => {
-  return props.isLoading && !renderedHtml.value && !props.rawHtml;
+  // Already have displayable content
+  if (renderedHtml.value || props.rawHtml) return false;
+  // Render worker is processing — keep showing loading
+  if (renderParams.value) return true;
+  // No content provided yet — waiting for data
+  if (props.fileContent == null && !props.isDiff) return true;
+  // Content provided but nothing to render (e.g. empty file)
+  return false;
 });
 
 function basename(filepath: string) {

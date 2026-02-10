@@ -36,7 +36,7 @@ watch(
 
 const api: FloatingWindowAPI = {
   key: props.entry.key,
-  content: computed(() => props.entry.content || ''),
+  content: computed(() => props.entry.content ?? ''),
   html: computed(() => props.entry.resolvedHtml),
   title: computed(() => props.entry.title || ''),
   status: computed(() => props.entry.status || ''),
@@ -304,7 +304,7 @@ function onResizeEnd(e: PointerEvent) {
             v-bind="entry.props || {}"
           />
         </template>
-        <CodeContent v-else :html="entry.resolvedHtml || entry.content || ''" :variant="entry.variant" />
+        <CodeContent v-else :html="entry.resolvedHtml || (typeof entry.content === 'string' ? entry.content : '')" :variant="entry.variant" />
       </div>
       <Transition name="fade">
         <button

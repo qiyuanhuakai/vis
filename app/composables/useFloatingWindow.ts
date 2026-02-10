@@ -2,7 +2,7 @@ import { inject, type Ref } from 'vue';
 
 export interface FloatingWindowAPI {
   key: string;
-  content: Ref<string>;
+  content: Ref<string | (() => Promise<string>)>;
   html: Ref<string>;
   title: Ref<string>;
   status: Ref<string>;

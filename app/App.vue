@@ -144,17 +144,12 @@ import ProjectPicker from './components/ProjectPicker.vue';
 import hexdump from '@kikuchan/hexdump';
 import FloatingWindow from './components/FloatingWindow.vue';
 import BashContent from './components/ToolWindow/Bash.vue';
-import GrepContent from './components/ToolWindow/Grep.vue';
-import EditContent from './components/ToolWindow/Edit.vue';
-import GlobContent from './components/ToolWindow/Glob.vue';
-import WebContent from './components/ToolWindow/Web.vue';
-import TaskContent from './components/ToolWindow/Task.vue';
 import DefaultContent from './components/ToolWindow/Default.vue';
 import SidePanel from './components/SidePanel.vue';
 import TopPanel from './components/TopPanel.vue';
 import PermissionContent from './components/ToolWindow/Permission.vue';
 import QuestionContent from './components/ToolWindow/Question.vue';
-import FileViewerContent from './components/ToolWindow/FileViewer.vue';
+import FileViewerContent from './components/FileViewer.vue';
 import ShellContent from './components/ToolWindow/Shell.vue';
 import {
   formatGlobToolTitle,
@@ -5871,6 +5866,15 @@ function extractToolOutputText(output: unknown) {
   return formatToolValue(output);
 }
 
+function formatTaskToolOutput(value: string) {
+  return value
+    .split('\n')
+    .filter((line) => !/^task_id:\s*/i.test(line.trim()))
+    .join('\n')
+    .replace(/<\/?task_result>/gi, '')
+    .trim();
+}
+
 function decodeApiTextContent(data: FileContentResponse) {
   const encoding = typeof data?.encoding === 'string' ? data.encoding : 'utf-8';
   const content = typeof data?.content === 'string' ? data.content : '';
@@ -5936,6 +5940,23 @@ async function renderReadHtmlFromApi(params: {
   } catch (error) {
     return renderText(`READ API failed: ${toErrorMessage(error)}`);
   }
+}
+
+function renderEditDiffHtml(params: {
+  diff: string;
+  code?: string;
+  after?: string;
+  lang: string;
+}): () => Promise<string> {
+  return () => renderWorkerHtml({
+    id: `edit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    code: params.code ?? '',
+    after: params.after,
+    patch: params.diff,
+    lang: params.lang,
+    theme: 'github-dark',
+    gutterMode: 'double',
+  });
 }
 
 function parsePermissionRequest(
@@ -6525,7 +6546,6 @@ function openSessionDiff(path: string) {
     props: {
       path,
       isDiff: true,
-      isLoading: true,
       diffCode: entry.before ?? '',
       diffAfter: entry.after,
       gutterMode: 'none',
@@ -6577,7 +6597,6 @@ function handleShowMessageDiff(payload: { messageKey: string; diffs: Array<Messa
     props: {
       path: firstFile,
       isDiff: true,
-      isLoading: true,
       diffCode: hasBeforeAfter ? (diffs[0]?.before ?? '') : '',
       diffAfter: hasBeforeAfter ? (diffs[0]?.after ?? '') : undefined,
       diffPatch: hasBeforeAfter ? undefined : combinedDiff,
@@ -6639,7 +6658,6 @@ async function openFileViewer(path: string) {
     props: {
       path,
       lang,
-      isLoading: true,
       gutterMode: 'default',
       theme: shikiTheme.value,
     },
@@ -6661,7 +6679,6 @@ async function openFileViewer(path: string) {
         path,
         rawHtml: 'No active directory selected.',
         gutterMode: 'none',
-        isLoading: false,
         theme: shikiTheme.value,
       },
     });
@@ -6685,7 +6702,6 @@ async function openFileViewer(path: string) {
               'Binary content is not included in this API response.\nUnable to render hexdump for this file.',
             gutterMode: 'none',
             isBinary: false,
-            isLoading: false,
             theme: shikiTheme.value,
           },
         });
@@ -6700,7 +6716,6 @@ async function openFileViewer(path: string) {
           rawHtml: `<pre class="shiki"><code>${dump}</code></pre>`,
           gutterMode: 'none',
           isBinary: true,
-          isLoading: false,
           theme: shikiTheme.value,
         },
       });
@@ -6715,7 +6730,6 @@ async function openFileViewer(path: string) {
         lang: resolvedLang,
         gutterMode: 'default',
         isBinary: false,
-        isLoading: false,
         theme: shikiTheme.value,
       },
     });
@@ -6726,7 +6740,6 @@ async function openFileViewer(path: string) {
         rawHtml: `File load failed: ${toErrorMessage(error)}`,
         gutterMode: 'none',
         isBinary: false,
-        isLoading: false,
         theme: shikiTheme.value,
       },
     });
@@ -7124,7 +7137,6 @@ function extractFileRead(payload: unknown, eventType: string) {
           ? formatToolValue(stateError)
           : undefined;
 
-    // New component-based dispatch - returns component + props instead of formatted content
     const toolPrefix = (label: string, detail?: string) => {
       const d = detail?.trim();
       return d ? `[${label}] ${d}` : `[${label}]`;
@@ -7134,9 +7146,23 @@ function extractFileRead(payload: unknown, eventType: string) {
       case 'bash': {
         const command = typeof input?.command === 'string' ? input.command.trim() : '';
         const titleDetail = command ? command.split('\n')[0].slice(0, 80) : undefined;
+        const bashOutput = outputText ?? errorText ?? '';
+        const bashLines: string[] = [];
+        if (command) bashLines.push(`$ ${command}`);
+        if (bashOutput.trim()) {
+          if (bashLines.length > 0) bashLines.push('');
+          bashLines.push(bashOutput);
+        }
+        const bashCode = bashLines.length === 0 && status === 'running' ? '$' : bashLines.join('\n');
         return {
-          component: BashContent,
-          props: { input, output: outputText, error: errorText, status, state },
+          content: () => renderWorkerHtml({
+            id: `bash-${callId ?? Date.now().toString(36)}`,
+            code: bashCode,
+            lang: 'shellscript',
+            theme: 'github-dark',
+            gutterMode: 'none',
+          }),
+          variant: 'term' as const,
           callId,
           toolName: tool,
           toolStatus: status,
@@ -7166,9 +7192,25 @@ function extractFileRead(payload: unknown, eventType: string) {
       }
       case 'grep': {
         if (status === 'running') return null;
+        const grepCode = outputText ?? errorText ?? '';
+        const gutterLines = grepCode
+          .split('\n')
+          .map((line) => {
+            const match = line.match(/^\s*Line\s+(\d+):/);
+            return match?.[1] ?? '';
+          })
+        const grepPattern = typeof input?.pattern === 'string' ? input.pattern : undefined;
         return {
-          component: GrepContent,
-          props: { input, output: outputText, error: errorText, status },
+          content: () => renderWorkerHtml({
+            id: `grep-${callId ?? Date.now().toString(36)}`,
+            code: grepCode.split('\n').map((line) => line.replace(/^\s*Line\s+(\d+):/, '')).join('\n'),
+            lang: 'text',
+            theme: 'github-dark',
+            gutterMode: 'single',
+            gutterLines,
+            grepPattern,
+          }),
+          variant: 'code' as const,
           callId,
           toolName: tool,
           toolStatus: status,
@@ -7177,9 +7219,16 @@ function extractFileRead(payload: unknown, eventType: string) {
       }
       case 'glob': {
         if (status === 'running') return null;
+        const globCode = outputText ?? errorText ?? '';
         return {
-          component: GlobContent,
-          props: { input, output: outputText, error: errorText, status },
+          content: () => renderWorkerHtml({
+            id: `glob-${callId ?? Date.now().toString(36)}`,
+            code: globCode,
+            lang: 'text',
+            theme: 'github-dark',
+            gutterMode: 'none',
+          }),
+          variant: 'term' as const,
           callId,
           toolName: tool,
           toolStatus: status,
@@ -7187,9 +7236,16 @@ function extractFileRead(payload: unknown, eventType: string) {
         };
       }
       case 'list': {
+        const listCode = outputText ?? errorText ?? '';
         return {
-          component: DefaultContent,
-          props: { input, output: outputText, error: errorText, status, toolName: tool },
+          content: () => renderWorkerHtml({
+            id: `list-${callId ?? Date.now().toString(36)}`,
+            code: listCode,
+            lang: 'text',
+            theme: 'github-dark',
+            gutterMode: 'single',
+          }),
+          variant: 'code' as const,
           callId,
           toolName: tool,
           toolStatus: status,
@@ -7198,9 +7254,19 @@ function extractFileRead(payload: unknown, eventType: string) {
       }
       case 'webfetch': {
         if (status === 'running') return null;
+        const webfetchCode = outputText ?? errorText ?? '';
+        const format = typeof input?.format === 'string' ? input.format.toLowerCase() : '';
+        const webfetchLang =
+          format === 'html' ? 'html' : format === 'markdown' ? 'markdown' : 'text';
         return {
-          component: WebContent,
-          props: { input, output: outputText, error: errorText, status, toolName: tool },
+          content: () => renderWorkerHtml({
+            id: `webfetch-${callId ?? Date.now().toString(36)}`,
+            code: webfetchCode,
+            lang: webfetchLang,
+            theme: 'github-dark',
+            gutterMode: 'none',
+          }),
+          variant: 'plain' as const,
           callId,
           toolName: tool,
           toolStatus: status,
@@ -7211,9 +7277,16 @@ function extractFileRead(payload: unknown, eventType: string) {
       case 'codesearch': {
         if (status === 'running') return null;
         const searchPrefix = tool === 'websearch' ? 'SEARCH' : 'CODE';
+        const searchCode = outputText ?? errorText ?? '';
         return {
-          component: WebContent,
-          props: { input, output: outputText, error: errorText, status, toolName: tool },
+          content: () => renderWorkerHtml({
+            id: `${tool}-${callId ?? Date.now().toString(36)}`,
+            code: searchCode,
+            lang: 'markdown',
+            theme: 'github-dark',
+            gutterMode: 'none',
+          }),
+          variant: 'plain' as const,
           callId,
           toolName: tool,
           toolStatus: status,
@@ -7221,9 +7294,16 @@ function extractFileRead(payload: unknown, eventType: string) {
         };
       }
       case 'task': {
+        const taskCode = formatTaskToolOutput(outputText ?? errorText ?? '');
         return {
-          component: TaskContent,
-          props: { input, output: outputText, error: errorText, status },
+          content: () => renderWorkerHtml({
+            id: `task-${callId ?? Date.now().toString(36)}`,
+            code: taskCode,
+            lang: 'markdown',
+            theme: 'github-dark',
+            gutterMode: 'none',
+          }),
+          variant: 'term' as const,
           callId,
           toolName: tool,
           toolStatus: status,
@@ -7231,9 +7311,16 @@ function extractFileRead(payload: unknown, eventType: string) {
         };
       }
       case 'batch': {
+        const batchCode = outputText ?? errorText ?? '';
         return {
-          component: DefaultContent,
-          props: { input, output: outputText, error: errorText, status, toolName: tool },
+          content: () => renderWorkerHtml({
+            id: `batch-${callId ?? Date.now().toString(36)}`,
+            code: batchCode,
+            lang: 'text',
+            theme: 'github-dark',
+            gutterMode: 'single',
+          }),
+          variant: 'code' as const,
           callId,
           toolName: tool,
           toolStatus: status,
@@ -7242,9 +7329,18 @@ function extractFileRead(payload: unknown, eventType: string) {
       }
       case 'write': {
         const writePath = resolveReadWritePath(input, metadata, state);
+        const writeCode = outputText ?? errorText ?? '';
+        const inputFilePath = typeof input?.filePath === 'string' ? input.filePath : writePath;
+        const writeLang = guessLanguageFromPath(inputFilePath);
         return {
-          component: DefaultContent,
-          props: { input, output: outputText, error: errorText, status, metadata, state, toolName: tool },
+          content: () => renderWorkerHtml({
+            id: `write-${callId ?? Date.now().toString(36)}`,
+            code: writeCode,
+            lang: writeLang,
+            theme: 'github-dark',
+            gutterMode: 'single',
+          }),
+          variant: 'code' as const,
           callId,
           toolName: tool,
           toolStatus: status,
@@ -7254,15 +7350,17 @@ function extractFileRead(payload: unknown, eventType: string) {
       case 'edit': {
         if (status === 'running') return null;
         const diff = typeof metadata?.diff === 'string' ? metadata.diff : '';
+        if (!diff) return null;
         const editPath = resolveReadWritePath(input, metadata, state);
         const filediff = metadata?.filediff && typeof metadata.filediff === 'object'
           ? (metadata.filediff as Record<string, unknown>)
           : undefined;
         const editCode = typeof filediff?.before === 'string' ? filediff.before : undefined;
         const editAfter = typeof filediff?.after === 'string' ? filediff.after : undefined;
+        const editLang = guessLanguageFromPath(editPath);
         return {
-          component: EditContent,
-          props: { input, output: outputText, error: errorText, status, metadata, toolName: tool, diff, code: editCode, after: editAfter },
+          content: renderEditDiffHtml({ diff, code: editCode, after: editAfter, lang: editLang }),
+          variant: 'diff' as const,
           callId,
           toolName: tool,
           toolStatus: status,
@@ -7272,6 +7370,7 @@ function extractFileRead(payload: unknown, eventType: string) {
       case 'multiedit': {
         if (status === 'running') return null;
         const editPathMulti = resolveReadWritePath(input, metadata, state);
+        const multiLang = guessLanguageFromPath(editPathMulti);
         const results = Array.isArray(metadata?.results) ? metadata.results : [];
         const editEntries = results
           .map((item) => {
@@ -7291,8 +7390,8 @@ function extractFileRead(payload: unknown, eventType: string) {
           .filter((item): item is { diff: string; code: string | undefined; after: string | undefined } => Boolean(item));
         if (editEntries.length > 1) {
           return editEntries.map((entry, index) => ({
-            component: EditContent,
-            props: { input, output: outputText, error: errorText, status, metadata, toolName: tool, diff: entry.diff, code: entry.code, after: entry.after, index, total: editEntries.length },
+            content: renderEditDiffHtml({ diff: entry.diff, code: entry.code, after: entry.after, lang: multiLang }),
+            variant: 'diff' as const,
             callId: callId ? `${callId}:${index}` : undefined,
             toolName: tool,
             toolStatus: status,
@@ -7301,22 +7400,15 @@ function extractFileRead(payload: unknown, eventType: string) {
         }
         if (editEntries.length === 1) {
           return {
-            component: EditContent,
-            props: { input, output: outputText, error: errorText, status, metadata, toolName: tool, diff: editEntries[0].diff, code: editEntries[0].code, after: editEntries[0].after },
+            content: renderEditDiffHtml({ diff: editEntries[0].diff, code: editEntries[0].code, after: editEntries[0].after, lang: multiLang }),
+            variant: 'diff' as const,
             callId,
             toolName: tool,
             toolStatus: status,
             title: toolPrefix('EDIT', editPathMulti),
           };
         }
-        return {
-          component: EditContent,
-          props: { input, output: outputText, error: errorText, status, metadata, toolName: tool },
-          callId,
-          toolName: tool,
-          toolStatus: status,
-          title: toolPrefix('EDIT', editPathMulti),
-        };
+        return null;
       }
       case 'plan_enter':
       case 'plan_exit': {
@@ -9249,15 +9341,10 @@ function connect() {
     if (patchEvents) {
       patchEvents.forEach((patchEvent, index) => {
         const callId = patchEvent.callId ?? `apply_patch:${index}`;
+        const patchLang = patchEvent.lang ?? 'text';
         fw.open(callId, {
-          component: EditContent,
-          props: {
-            status: patchEvent.toolStatus,
-            toolName: patchEvent.toolName,
-            diff: patchEvent.content,
-            code: patchEvent.code,
-            after: patchEvent.after,
-          },
+          content: renderEditDiffHtml({ diff: patchEvent.content, code: patchEvent.code, after: patchEvent.after, lang: patchLang }),
+          variant: 'diff',
           status: patchEvent.toolStatus,
           title: patchEvent.toolTitle ?? patchEvent.path ?? 'apply_patch',
           color: toolColor(patchEvent.toolName),
