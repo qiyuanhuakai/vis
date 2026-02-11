@@ -238,6 +238,12 @@ onBeforeUnmount(() => {
   cleanupDrag();
 });
 
+watch(() => props.entry, () => {
+  if (dragTarget) {
+    applyTransform(dragX, dragY);
+  }
+}, { deep: true, flush: 'post' });
+
 // Resize handling
 let resizeStartX = 0;
 let resizeStartY = 0;
