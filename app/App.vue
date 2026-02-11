@@ -5779,14 +5779,23 @@ watch(
     if (typeof previous === 'undefined') return;
     if (isBootstrapping.value) return;
     selectedSessionId.value = '';
+    const directory = value.trim();
+    if (selectedProjectId.value && directory) {
+      sessionGraphStore.rememberProjectDirectory(selectedProjectId.value, directory);
+    }
+    registerProjectDirectories();
     const resolvedProjectId = resolveProjectIdForDirectorySelection(value || undefined);
-    selectedProjectId.value = resolvedProjectId || '';
+    if (resolvedProjectId) {
+      selectedProjectId.value = resolvedProjectId;
+      if (directory) sessionGraphStore.rememberProjectDirectory(resolvedProjectId, directory);
+    }
     if (!selectedProjectId.value && value) {
       void fetchCurrentProject(value).then((project) => {
         if (!project?.id) return;
         upsertProject(project);
         if (selectedWorktreeDir.value === value) {
           selectedProjectId.value = project.id;
+          if (directory) sessionGraphStore.rememberProjectDirectory(project.id, directory);
           syncVisibleSessionsFromGraph();
         }
       });
