@@ -718,7 +718,7 @@ let cachedMdTheme = '';
 function getMarkdownIt(highlighter: Awaited<ReturnType<typeof createHighlighter>>, theme: string) {
   if (!cachedMd || cachedMdTheme !== theme) {
     cachedMdTheme = theme;
-    cachedMd = new MarkdownIt({ html: true, linkify: true });
+    cachedMd = new MarkdownIt({ html: true, linkify: true, breaks: true });
     cachedMd.use(
       fromHighlighter(highlighter, {
         theme,
