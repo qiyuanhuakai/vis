@@ -1,6 +1,6 @@
 <template>
-  <div v-if="state.html" class="message-viewer">
-    <div class="message-content" v-html="state.html"></div>
+  <div v-if="state.html" class="message-viewer min-h-[1.2em] leading-[inherit] text-[inherit]">
+    <div class="message-content leading-[inherit] text-[inherit]" v-html="state.html"></div>
   </div>
 </template>
 
@@ -74,17 +74,6 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.message-viewer {
-  line-height: inherit;
-  color: inherit;
-  min-height: 1.2em;
-}
-
-.message-content {
-  line-height: inherit;
-  color: inherit;
-}
-
 .message-content :deep(pre),
 .message-content :deep(code) {
   margin: 0;
@@ -147,19 +136,26 @@ onBeforeUnmount(() => {
   font-weight: inherit;
 }
 
-/* markdown-it rendered content */
+/* markdown-it rendered content — match shiki line density */
 .message-content :deep(.markdown-host) {
-  line-height: 1.6;
+  line-height: 1.15;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
-.message-content :deep(.markdown-host) > *:first-child {
-  margin-top: 0;
-}
-
-.message-content :deep(.markdown-host) > *:last-child {
-  margin-bottom: 0;
+.message-content :deep(.markdown-host ul),
+.message-content :deep(.markdown-host ol),
+.message-content :deep(.markdown-host li),
+.message-content :deep(.markdown-host blockquote),
+.message-content :deep(.markdown-host p),
+.message-content :deep(.markdown-host h1),
+.message-content :deep(.markdown-host h2),
+.message-content :deep(.markdown-host h3),
+.message-content :deep(.markdown-host h4),
+.message-content :deep(.markdown-host h5),
+.message-content :deep(.markdown-host h6) {
+  margin: 0;
+  padding: 0;
 }
 
 .message-content :deep(.markdown-host h1),
