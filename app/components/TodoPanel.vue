@@ -3,7 +3,7 @@
     <button
       type="button"
       class="todo-toggle"
-      :aria-expanded="String(!collapsed)"
+      :aria-expanded="!collapsed"
       :aria-label="collapsed ? 'Expand TODO panel' : 'Collapse TODO panel'"
       @click="emit('toggle-collapse')"
     >
@@ -56,7 +56,7 @@ type TodoSession = {
   isSubagent: boolean;
   todos: TodoEntry[];
   loading: boolean;
-  error?: string;
+  error: string | undefined;
 };
 
 type DisplayTodo = TodoEntry & {

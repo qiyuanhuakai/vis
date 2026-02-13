@@ -722,7 +722,6 @@ function getMarkdownIt(highlighter: Awaited<ReturnType<typeof createHighlighter>
     cachedMd.use(
       fromHighlighter(highlighter, {
         theme,
-        defaultLanguage: 'text',
       }),
     );
   }

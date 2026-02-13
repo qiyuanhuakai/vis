@@ -28,8 +28,9 @@ const pending = new Map<string, PendingEntry>();
 
 function getWorker() {
   if (renderWorker) return renderWorker;
-  renderWorker = new RenderWorker();
-  renderWorker.onmessage = (event: MessageEvent<RenderResponse>) => {
+  const worker = new RenderWorker();
+  renderWorker = worker;
+  worker.onmessage = (event: MessageEvent<RenderResponse>) => {
     const data = event.data;
     const entry = pending.get(data.id);
     if (!entry) return;
@@ -37,11 +38,11 @@ function getWorker() {
     if (data.ok) entry.resolve(data.html);
     else entry.reject(new Error(data.error || 'Render failed'));
   };
-  renderWorker.onerror = (error) => {
+  worker.onerror = (error) => {
     pending.forEach((entry) => entry.reject(new Error(String(error))));
     pending.clear();
   };
-  return renderWorker;
+  return worker;
 }
 
 export function renderWorkerHtml(payload: RenderRequest) {

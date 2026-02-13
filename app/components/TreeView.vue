@@ -7,7 +7,7 @@
           class="tree-tab"
           :class="{ 'is-active': viewMode === 'changes' }"
           role="tab"
-          :aria-selected="String(viewMode === 'changes')"
+          :aria-selected="viewMode === 'changes'"
           @click="setViewMode('changes')"
         >
           Changes
@@ -17,7 +17,7 @@
           class="tree-tab"
           :class="{ 'is-active': viewMode === 'all' }"
           role="tab"
-          :aria-selected="String(viewMode === 'all')"
+          :aria-selected="viewMode === 'all'"
           @click="setViewMode('all')"
         >
           All files
@@ -179,17 +179,17 @@ function withPseudoNodes(nodes: TreeNode[], statusByPath: Record<string, TreeSta
 }
 
 function filterChanges(nodes: TreeNode[], statusByPath: Record<string, TreeStatus>): TreeNode[] {
-  return nodes
-    .map((node) => {
-      const children = node.children ? filterChanges(node.children, statusByPath) : undefined;
-      const changed = Boolean(statusByPath[node.path]);
-      if (!changed && (!children || children.length === 0)) return null;
-      return {
-        ...node,
-        children,
-      };
-    })
-    .filter((node): node is TreeNode => Boolean(node));
+  const result: TreeNode[] = [];
+  nodes.forEach((node) => {
+    const children = node.children ? filterChanges(node.children, statusByPath) : undefined;
+    const changed = Boolean(statusByPath[node.path]);
+    if (!changed && (!children || children.length === 0)) return;
+    result.push({
+      ...node,
+      children,
+    });
+  });
+  return result;
 }
 
 const normalizedNodes = computed(() => withPseudoNodes(props.rootNodes, props.statusByPath ?? {}));

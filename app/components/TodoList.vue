@@ -45,7 +45,7 @@ type TodoSession = {
   isSubagent: boolean;
   todos: TodoEntry[];
   loading: boolean;
-  error?: string;
+  error: string | undefined;
 };
 
 type DisplayTodo = TodoEntry & {

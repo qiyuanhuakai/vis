@@ -22,6 +22,10 @@ const bodyEl = ref<HTMLElement>();
 const scrollMode = computed<ScrollMode>(() => props.entry.scroll || 'manual');
 const { showResumeButton, resumeFollow } = useAutoScroller(bodyEl, scrollMode);
 
+function handleResumeFollowClick() {
+  resumeFollow();
+}
+
 watch(
   () => props.entry.resolvedHtml,
   () => {
@@ -320,7 +324,7 @@ function onResizeEnd(e: PointerEvent) {
         <button
           v-if="showResumeButton"
           class="follow-resume-btn"
-          @click.stop="resumeFollow"
+          @click.stop="handleResumeFollowClick"
         ><Icon icon="lucide:arrow-down" :width="14" :height="14" /></button>
       </Transition>
     </div>

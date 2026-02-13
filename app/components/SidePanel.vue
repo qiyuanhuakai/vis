@@ -4,7 +4,7 @@
       v-if="collapsed"
       type="button"
       class="side-toggle side-toggle-collapsed"
-      :aria-expanded="String(!collapsed)"
+      :aria-expanded="!collapsed"
       aria-label="Expand side panel"
       @click="emit('toggle-collapse')"
     >
@@ -25,7 +25,7 @@
         <button
           type="button"
           class="side-toggle side-toggle-inline"
-          :aria-expanded="String(!collapsed)"
+          :aria-expanded="!collapsed"
           aria-label="Collapse side panel"
           @click="emit('toggle-collapse')"
         >
@@ -69,7 +69,7 @@ type TodoPanelSession = {
   isSubagent: boolean;
   todos: TodoItem[];
   loading: boolean;
-  error?: string;
+  error: string | undefined;
 };
 
 type TreeStatus = 'added' | 'modified' | 'deleted';
