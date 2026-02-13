@@ -98,20 +98,24 @@ export function useAutoScroller(
       followDebug('resumeTracking:already-active');
       return;
     }
-    if (options.syncToBottom) {
-      scrollToBottom(false);
-      isTrackingPaused.value = false;
-      return;
-    }
     isTrackingPaused.value = false;
-    if (scrollMode.value !== 'follow') return;
-    const el = containerEl.value;
-    if (!el) return;
-    isFollowing.value = isAtBottom(el);
-    followDebug('resumeTracking:done', {
-      isFollowing: isFollowing.value,
-      atBottom: isAtBottom(el),
-    });
+    if (options.syncToBottom) {
+      isFollowing.value = true;
+      followDebug('resumeTracking:done', {
+        isFollowing: true,
+        syncToBottom: true,
+      });
+      scrollToBottom(false);
+    } else if (scrollMode.value === 'follow') {
+      const el = containerEl.value;
+      if (el) {
+        isFollowing.value = isAtBottom(el);
+        followDebug('resumeTracking:done', {
+          isFollowing: isFollowing.value,
+          atBottom: isAtBottom(el),
+        });
+      }
+    }
   }
 
   function runWithoutTracking<T>(fn: () => T): T {

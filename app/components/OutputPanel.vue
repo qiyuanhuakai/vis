@@ -11,8 +11,8 @@
         <div ref="contentEl" class="output-panel-content">
           <template v-for="root in visibleRoots" :key="root.id">
             <div class="thread-block">
-              <button
-                v-if="root.role === 'user' && root.sessionId"
+                <button
+                  v-if="root.role === 'user' && root.sessionID"
                 type="button"
                 class="ib-action ib-top-right"
                 @click="confirmFork(root)"
@@ -24,17 +24,17 @@
                 <div v-if="root.role === 'user'" class="ib-msg-block ib-msg-user">
                   <div class="ib-msg-row">
                     <MessageViewer
-                      :code="root.content"
+                      :code="getMessageContent(root)"
                       :lang="'markdown'"
                       :theme="theme"
                       @rendered="handleMessageRendered(getThreadUserRenderKey(root))"
                     />
                     <div
-                      v-if="root.attachments && root.attachments.length > 0"
+                      v-if="getMessageAttachments(root).length > 0"
                       class="output-entry-attachments"
                     >
                       <img
-                        v-for="item in root.attachments"
+                        v-for="item in getMessageAttachments(root)"
                         :key="item.id"
                         class="output-entry-attachment clickable"
                         :src="item.url"
@@ -62,18 +62,9 @@
                         @rendered="handleMessageRendered(getThreadAssistantRenderKey(root))"
                       />
                     </div>
-                    <div
-                      v-if="isThreadStreaming(root)"
-                      class="ib-streaming-indicator"
-                    >
-                      streaming...
-                    </div>
-                    <div
-                      v-if="getFinalAnswer(root)?.attachments && (getFinalAnswer(root)?.attachments?.length ?? 0) > 0"
-                      class="output-entry-attachments"
-                    >
+                    <div v-if="getMessageAttachments(getFinalAnswer(root)).length > 0" class="output-entry-attachments">
                       <img
-                        v-for="item in getFinalAnswer(root)?.attachments ?? []"
+                        v-for="item in getMessageAttachments(getFinalAnswer(root))"
                         :key="item.id"
                         class="output-entry-attachment clickable"
                         :src="item.url"
@@ -153,12 +144,12 @@
             >
               <div class="history-meta">
                 <span class="history-index">#{{ index + 1 }}</span>
-                <span class="history-time">{{ formatMessageTime(msg.time) }}</span>
+                <span class="history-time">{{ formatMessageTime(getMessageTime(msg)) }}</span>
                 <span v-if="msg.agent" class="history-agent">{{ msg.agent }}</span>
               </div>
               <div class="history-content-wrapper">
                 <MessageViewer
-                  :code="msg.content"
+                  :code="getMessageContent(msg)"
                   :lang="'markdown'"
                   :theme="theme"
                 />
@@ -187,35 +178,24 @@
 import { Icon } from '@iconify/vue';
 import { Transition, computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import MessageViewer from './MessageViewer.vue';
-import type { Message } from '../types/message';
+import type { MessageAttachment, MessageDiffEntry, MessageStatus, MessageUsage } from '../types/message';
+import type { MessageInfo } from '../types/sse';
 
 type DiffEntry = { file: string; diff: string; before?: string; after?: string };
-type LegacyQueueMessage = {
-  isMessage?: boolean;
-  isSubagentMessage?: boolean;
-  messageId?: string;
-  messageKey?: string;
-  sessionId?: string;
-  role?: 'user' | 'assistant';
-  content?: string;
-  messageAgent?: string;
-  messageModel?: string;
-  messageProviderId?: string;
-  messageModelId?: string;
-  messageVariant?: string;
-  messageTime?: number;
-  messageUsage?: Message['usage'];
-  attachments?: Message['attachments'];
-  messageError?: { name: string; message: string } | null;
-  status?: Message['status'];
-};
 
 const props = defineProps<{
-  roots?: Message[];
-  getChildren?: (parentId: string) => Message[];
-  getThread?: (rootId: string) => Message[];
-  getFinalAnswer?: (rootId: string) => Message | undefined;
-  queue?: unknown[];
+  roots?: MessageInfo[];
+  getChildren?: (parentId: string) => MessageInfo[];
+  getThread?: (rootId: string) => MessageInfo[];
+  getFinalAnswer?: (rootId: string) => MessageInfo | undefined;
+  getTextContent?: (messageId: string) => string;
+  getImageAttachments?: (messageId: string) => MessageAttachment[] | undefined;
+  getStatus?: (messageId: string) => MessageStatus;
+  getUsage?: (messageId: string) => MessageUsage | undefined;
+  getError?: (messageId: string) => { name: string; message: string } | null;
+  getDiffs?: (messageId: string) => MessageDiffEntry[] | undefined;
+  getModelPath?: (messageId: string) => string | undefined;
+  getTime?: (messageId: string) => number | undefined;
   isFollowing: boolean;
   statusText: string;
   isStatusError: boolean;
@@ -250,111 +230,117 @@ function followDebug(event: string, detail?: Record<string, unknown>) {
   console.debug(`[output-panel] ${event}`, { t });
 }
 
-const legacyThreads = computed(() => {
-  const raw = Array.isArray(props.queue) ? props.queue : [];
-  const normalized: Message[] = [];
-  for (let index = 0; index < raw.length; index++) {
-    const item = raw[index] as LegacyQueueMessage;
-    if (!item?.isMessage || item.isSubagentMessage) continue;
-    const role = item.role;
-    if (role !== 'user' && role !== 'assistant') continue;
-    const id = item.messageId ?? item.messageKey ?? `legacy:${index}`;
-    const sessionId = item.sessionId ?? 'legacy';
-    normalized.push({
-      id,
-      sessionId,
-      role,
-      content: item.content ?? '',
-      status: item.status ?? 'complete',
-      agent: item.messageAgent,
-      model: item.messageModel,
-      providerId: item.messageProviderId,
-      modelId: item.messageModelId,
-      variant: item.messageVariant,
-      time: item.messageTime,
-      usage: item.messageUsage,
-      attachments: item.attachments,
-      error: item.messageError ?? null,
-    });
-  }
-  const roots: Message[] = [];
-  const byParent = new Map<string, Message[]>();
-  const byRoot = new Map<string, Message[]>();
-  let activeRootId = '';
-  normalized.forEach((message) => {
-    if (message.role === 'user') {
-      activeRootId = message.id;
-      roots.push(message);
-      byRoot.set(activeRootId, [message]);
-      return;
-    }
-    if (!activeRootId) return;
-    message.parentId = activeRootId;
-    const children = byParent.get(activeRootId) ?? [];
-    children.push(message);
-    byParent.set(activeRootId, children);
-    const thread = byRoot.get(activeRootId) ?? [];
-    thread.push(message);
-    byRoot.set(activeRootId, thread);
-  });
-  return { roots, byParent, byRoot };
-});
+const visibleRoots = computed(() => props.roots ?? []);
 
-const visibleRoots = computed(() => {
-  const roots = props.roots ?? [];
-  if (roots.length > 0) return roots;
-  return legacyThreads.value.roots;
-});
-
-function getThread(rootId: string): Message[] {
+function getThread(rootId: string): MessageInfo[] {
   if (props.getThread) return props.getThread(rootId);
-  const roots = props.roots ?? [];
-  if (roots.length > 0) {
-    const root = roots.find((item) => item.id === rootId);
-    return root ? [root] : [];
-  }
-  return legacyThreads.value.byRoot.get(rootId) ?? [];
+  const root = visibleRoots.value.find((item) => item.id === rootId);
+  return root ? [root] : [];
 }
 
-function getChildren(parentId: string): Message[] {
+function getChildren(parentId: string): MessageInfo[] {
   if (props.getChildren) return props.getChildren(parentId);
-  const roots = props.roots ?? [];
-  if (roots.length > 0) return [];
-  return legacyThreads.value.byParent.get(parentId) ?? [];
+  return [];
 }
 
-function getFinalAnswer(root: Message): Message | undefined {
+function getFinalAnswer(root: MessageInfo): MessageInfo | undefined {
   if (props.getFinalAnswer) return props.getFinalAnswer(root.id);
   const assistants = getThread(root.id).filter((msg) => msg.role === 'assistant');
   return assistants[assistants.length - 1];
 }
 
-function getFinalAnswerContent(root: Message): string {
-  return getFinalAnswer(root)?.content ?? '';
+function getMessageContent(message?: MessageInfo): string {
+  if (!message) return '';
+  return props.getTextContent ? props.getTextContent(message.id) : '';
 }
 
-function getAssistantMessages(root: Message): Message[] {
+function getMessageAttachments(message?: MessageInfo): MessageAttachment[] {
+  if (!message || !props.getImageAttachments) return [];
+  return props.getImageAttachments(message.id) ?? [];
+}
+
+function getMessageStatus(message?: MessageInfo): MessageStatus {
+  if (!message) return 'streaming';
+  if (props.getStatus) return props.getStatus(message.id);
+  if (message.role === 'user') return 'complete';
+  if (message.error || message.finish === 'error') return 'error';
+  if (message.time.completed !== undefined || message.finish) return 'complete';
+  return 'streaming';
+}
+
+function getMessageError(message?: MessageInfo): { name: string; message: string } | null {
+  if (!message) return null;
+  if (props.getError) return props.getError(message.id);
+  if (message.role !== 'assistant' || !message.error) return null;
+  const data = message.error.data as Record<string, unknown> | undefined;
+  const value = typeof data?.message === 'string' ? data.message : '';
+  return { name: message.error.name, message: value };
+}
+
+function getMessageUsage(message?: MessageInfo): MessageUsage | undefined {
+  if (!message || !props.getUsage) return undefined;
+  return props.getUsage(message.id);
+}
+
+function getMessageDiffEntries(message?: MessageInfo): DiffEntry[] {
+  if (!message) return [];
+  if (props.getDiffs) return props.getDiffs(message.id) ?? [];
+  if (message.role !== 'user' || !Array.isArray(message.summary?.diffs)) return [];
+  return message.summary.diffs
+    .filter((item) => Boolean(item.file))
+    .map((item) => ({
+      file: item.file,
+      diff: '',
+      before: item.before,
+      after: item.after,
+    }));
+}
+
+function getMessageModelPath(message?: MessageInfo): string {
+  if (!message) return '';
+  if (props.getModelPath) return props.getModelPath(message.id) ?? '';
+  if (message.role === 'assistant') {
+    if (message.providerID && message.modelID) return `${message.providerID}/${message.modelID}`;
+    return message.modelID || message.providerID || '';
+  }
+  const providerId = message.model.providerID;
+  const modelId = message.model.modelID;
+  if (providerId && modelId) return `${providerId}/${modelId}`;
+  return modelId || providerId || '';
+}
+
+function getMessageTime(message?: MessageInfo): number | undefined {
+  if (!message) return undefined;
+  if (props.getTime) return props.getTime(message.id);
+  return typeof message.time.created === 'number' ? message.time.created : undefined;
+}
+
+function getFinalAnswerContent(root: MessageInfo): string {
+  return getMessageContent(getFinalAnswer(root));
+}
+
+function getAssistantMessages(root: MessageInfo): MessageInfo[] {
   return getThread(root.id).filter((msg) => msg.role === 'assistant');
 }
 
-function isThreadStreaming(root: Message): boolean {
+function isThreadStreaming(root: MessageInfo): boolean {
   const directChildren = getChildren(root.id);
-  if (directChildren.some((child) => child.role === 'assistant' && child.status === 'streaming')) {
+  if (directChildren.some((child) => child.role === 'assistant' && getMessageStatus(child) === 'streaming')) {
     return true;
   }
-  return getAssistantMessages(root).some((message) => message.status === 'streaming');
+  return getAssistantMessages(root).some((message) => getMessageStatus(message) === 'streaming');
 }
 
-function hasAssistantMessages(root: Message): boolean {
+function hasAssistantMessages(root: MessageInfo): boolean {
   return getAssistantMessages(root).length > 0;
 }
 
-function showHistoryButton(root: Message): boolean {
+function showHistoryButton(root: MessageInfo): boolean {
   const count = getAssistantMessages(root).length;
   return count > 1 || (props.isThinking && isThreadStreaming(root));
 }
 
-function showThreadHistory(root: Message) {
+function showThreadHistory(root: MessageInfo) {
   activeHistoryRoot.value = root;
 }
 
@@ -362,12 +348,13 @@ function closeHistory() {
   activeHistoryRoot.value = null;
 }
 
-function getThreadError(root: Message): { name: string; message: string } | null {
+function getThreadError(root: MessageInfo): { name: string; message: string } | null {
   const final = getFinalAnswer(root);
-  if (final?.error) return final.error;
+  const finalError = getMessageError(final);
+  if (finalError) return finalError;
   const thread = getThread(root.id);
   for (let index = thread.length - 1; index >= 0; index--) {
-    const error = thread[index].error;
+    const error = getMessageError(thread[index]);
     if (error) return error;
   }
   return null;
@@ -381,77 +368,88 @@ function formatMessageError(error: { name: string; message: string }): string {
   return parts.join(': ') || 'Error';
 }
 
-function getThreadDiffs(root: Message): DiffEntry[] {
+function getThreadDiffs(root: MessageInfo): DiffEntry[] {
   const final = getFinalAnswer(root);
-  return final?.diffs ?? root.diffs ?? [];
+  const map = props.messageDiffs;
+  if (map && typeof map.get === 'function') {
+    const keys = [
+      final?.id,
+      root.id,
+      final?.sessionID && final?.id ? `${final.sessionID}:${final.id}` : undefined,
+      root.sessionID && root.id ? `${root.sessionID}:${root.id}` : undefined,
+    ].filter((value): value is string => Boolean(value));
+    for (const key of keys) {
+      const mapped = map.get(key);
+      if (mapped && mapped.length > 0) return mapped;
+    }
+  }
+  const finalDiffs = getMessageDiffEntries(final);
+  if (finalDiffs.length > 0) return finalDiffs;
+  return getMessageDiffEntries(root);
 }
 
-function hasThreadDiffs(root: Message): boolean {
+function hasThreadDiffs(root: MessageInfo): boolean {
   return getThreadDiffs(root).length > 0;
 }
 
-function showThreadDiff(root: Message) {
+function showThreadDiff(root: MessageInfo) {
   const diffs = getThreadDiffs(root);
   if (diffs.length === 0) return;
   const messageKey = getFinalAnswer(root)?.id ?? root.id;
   emit('show-message-diff', { messageKey, diffs });
 }
 
-function canRevertThread(root: Message): boolean {
-  return root.role === 'user' && Boolean(root.sessionId) && hasThreadDiffs(root);
+function canRevertThread(root: MessageInfo): boolean {
+  return root.role === 'user' && Boolean(root.sessionID) && hasThreadDiffs(root);
 }
 
-function confirmFork(root: Message) {
-  if (root.role !== 'user' || !root.sessionId || !root.id) return;
+function confirmFork(root: MessageInfo) {
+  if (root.role !== 'user' || !root.sessionID || !root.id) return;
   if (!window.confirm('Fork from this message?')) return;
-  emit('fork-message', { sessionId: root.sessionId, messageId: root.id });
+  emit('fork-message', { sessionId: root.sessionID, messageId: root.id });
 }
 
-function confirmRevert(root: Message) {
-  if (root.role !== 'user' || !root.sessionId || !root.id) return;
+function confirmRevert(root: MessageInfo) {
+  if (root.role !== 'user' || !root.sessionID || !root.id) return;
   if (!window.confirm('Revert to this message?')) return;
-  emit('revert-message', { sessionId: root.sessionId, messageId: root.id });
+  emit('revert-message', { sessionId: root.sessionID, messageId: root.id });
 }
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-function formatThreadTargetLabel(root: Message): string {
+function formatThreadTargetLabel(root: MessageInfo): string {
   const final = getFinalAnswer(root);
   const parts: string[] = [];
-  if (final?.agent) parts.push(capitalize(final.agent));
-  const modelPath =
-    final?.providerId && final?.modelId
-      ? `${final.providerId}/${final.modelId}`
-      : final?.model || '';
+  const agent = root.agent ?? final?.agent;
+  if (agent) parts.push(`Agent ${agent}`);
+  const modelPath = getMessageModelPath(root) || getMessageModelPath(final);
   if (modelPath) parts.push(modelPath);
-  if (final?.variant) parts.push(`(${final.variant})`);
+  const variant = root.variant ?? final?.variant;
+  if (variant) parts.push(`(${variant})`);
   return parts.join(' ');
 }
 
-function getRoundTargetStyle(root: Message) {
+function getRoundTargetStyle(root: MessageInfo) {
   const final = getFinalAnswer(root);
-  const color = props.resolveAgentColor ? props.resolveAgentColor(final?.agent) : '#4ade80';
+  const color = props.resolveAgentColor ? props.resolveAgentColor(root.agent ?? final?.agent) : '#4ade80';
   return { color };
 }
 
-function getUserBoxStyle(root: Message) {
-  const color = props.resolveAgentColor ? props.resolveAgentColor(root.agent) : '#334155';
+function getUserBoxStyle(root: MessageInfo) {
+  const final = getFinalAnswer(root);
+  const color = props.resolveAgentColor ? props.resolveAgentColor(root.agent ?? final?.agent) : '#334155';
   if (color.startsWith('#') && color.length === 7) {
     return { borderLeftColor: `${color}99` };
   }
   return { borderLeftColor: color };
 }
 
-function formatThreadTimestamp(root: Message): string {
-  return formatMessageTime(getFinalAnswer(root)?.time ?? root.time);
+function formatThreadTimestamp(root: MessageInfo): string {
+  return formatMessageTime(getMessageTime(getFinalAnswer(root)) ?? getMessageTime(root));
 }
 
-function formatThreadElapsed(root: Message): string {
+function formatThreadElapsed(root: MessageInfo): string {
   const final = getFinalAnswer(root);
-  const start = root.time;
-  const end = final?.time;
+  const start = getMessageTime(root);
+  const end = getMessageTime(final);
   if (typeof start !== 'number' || typeof end !== 'number') return '';
   const sec = Math.round((end - start) / 1000);
   if (sec < 1) return '';
@@ -461,43 +459,21 @@ function formatThreadElapsed(root: Message): string {
   return rem > 0 ? `thought ${min}m${rem}s` : `thought ${min}m`;
 }
 
-function formatThreadFooterMeta(root: Message): string {
+function formatThreadFooterMeta(root: MessageInfo): string {
   const parts: string[] = [];
   const timestamp = formatThreadTimestamp(root);
   if (timestamp) parts.push(timestamp);
-  const usage = formatMessageUsage(getFinalAnswer(root));
-  if (usage) parts.push(usage);
+  const contextPercent = formatContextPercent(getFinalAnswer(root));
+  if (contextPercent) parts.push(contextPercent);
   const elapsed = formatThreadElapsed(root);
   if (elapsed) parts.push(elapsed);
   return parts.join(', ');
 }
 
-function formatMessageUsage(message?: Message): string {
-  if (!message?.usage || message.role !== 'assistant') return '';
-  const tokens = message.usage.tokens;
-  if (!tokens) return '';
-  const input = formatCompactCount(tokens.input);
-  const output = formatCompactCount(tokens.output);
-  const reasoning = formatCompactCount(tokens.reasoning);
-  if (input === '0' && output === '0' && reasoning === '0') return '';
-  const cost = typeof message.usage.cost === 'number' ? formatCost(message.usage.cost) : '$--';
-  return `In ${input} / Out ${output} / Reason ${reasoning} / ${cost}`;
-}
-
-function formatCompactCount(value: number) {
-  if (!Number.isFinite(value)) return '0';
-  if (value <= 0) return '0';
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
-  if (value >= 10_000) return `${Math.round(value / 1_000)}k`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-  return `${Math.round(value)}`;
-}
-
-function formatCost(value: number) {
-  if (!Number.isFinite(value)) return '$--';
-  if (value === 0) return '$0.000';
-  if (value < 0.01) return `$${value.toFixed(4)}`;
-  return `$${value.toFixed(3)}`;
+function formatContextPercent(message?: MessageInfo): string {
+  const value = getMessageUsage(message)?.contextPercent;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '';
+  return `ctx ${Math.round(value)}%`;
 }
 
 function formatMessageTime(value?: number) {
@@ -520,7 +496,7 @@ const renderedKeys = ref(new Set<string>());
 const thinkingFrames = ['', '.', '..', '...'];
 const thinkingIndex = ref(0);
 const thinkingSuffix = ref('');
-const activeHistoryRoot = ref<Message | null>(null);
+const activeHistoryRoot = ref<MessageInfo | null>(null);
 let thinkingTimer: number | undefined;
 let contentResizeObserver: ResizeObserver | undefined;
 
@@ -532,20 +508,20 @@ const thinkingDisplayText = computed(() => {
   return `${heads} Thinking${thinkingSuffix.value}`;
 });
 
-function getThreadUserRenderKey(root: Message): string {
+function getThreadUserRenderKey(root: MessageInfo): string {
   return `thread-user:${root.id}`;
 }
 
-function getThreadAssistantRenderKey(root: Message): string {
+function getThreadAssistantRenderKey(root: MessageInfo): string {
   const final = getFinalAnswer(root);
   return `thread-assistant:${root.id}:${final?.id ?? 'none'}`;
 }
 
-function getThreadTransitionKey(root: Message): string {
+function getThreadTransitionKey(root: MessageInfo): string {
   return getFinalAnswer(root)?.id ?? root.id;
 }
 
-function isRootRendered(root: Message): boolean {
+function isRootRendered(root: MessageInfo): boolean {
   const keys = [getThreadUserRenderKey(root)];
   if (hasAssistantMessages(root)) keys.push(getThreadAssistantRenderKey(root));
   return keys.every((key) => renderedKeys.value.has(key));
@@ -569,7 +545,6 @@ function beginInitialRenderTracking() {
 }
 
 function handleScroll() {
-  initialRenderTrackingActive.value = false;
   followDebug('handleScroll');
   emit('scroll');
 }

@@ -30,7 +30,14 @@
                 :get-children="msg.getChildren"
                 :get-thread="msg.getThread"
                 :get-final-answer="msg.getFinalAnswer"
-                :queue="queue"
+                :get-text-content="msg.getTextContent"
+                :get-image-attachments="msg.getImageAttachments"
+                :get-status="msg.getStatus"
+                :get-usage="msg.getUsage"
+                :get-error="msg.getError"
+                :get-diffs="msg.getDiffs"
+                :get-model-path="msg.getModelPath"
+                :get-time="msg.getTime"
                 :is-following="isFollowing"
                 :status-text="statusText"
                 :is-status-error="isStatusError"
@@ -47,7 +54,7 @@
                 @show-message-diff="handleShowMessageDiff"
                 @show-message-history="handleShowMessageHistory"
                 @open-image="handleOpenImage"
-                @content-resized="notifyContentChange()"
+                @content-resized="handleOutputPanelContentResized"
                 @initial-render-complete="handleOutputPanelInitialRenderComplete"
               />
               <SidePanel
@@ -485,30 +492,10 @@ function handleOutputPanelInitialRenderComplete() {
   });
   if (!outputPanelInitialFollowPending.value) return;
   outputPanelInitialFollowPending.value = false;
-  runWithoutOutputPanelTracking(() => {
-    followDebug('initialRenderComplete:resumeFollow');
-    resumeFollow(false);
-  });
+  followDebug('initialRenderComplete:resumeTracking');
+  resumeOutputPanelTracking({ syncToBottom: true });
   nextTick(() => {
-    runWithoutOutputPanelTracking(() => {
-      followDebug('initialRenderComplete:scroll-1');
-      scrollOutputPanelToBottom(false);
-    });
-    requestAnimationFrame(() => {
-      runWithoutOutputPanelTracking(() => {
-        followDebug('initialRenderComplete:scroll-2');
-        scrollOutputPanelToBottom(false);
-      });
-      requestAnimationFrame(() => {
-        runWithoutOutputPanelTracking(() => {
-          followDebug('initialRenderComplete:scroll-3');
-          scrollOutputPanelToBottom(false);
-        });
-        followDebug('initialRenderComplete:resumeTracking');
-        resumeOutputPanelTracking({ syncToBottom: true });
-        syncFloatingExtent();
-      });
-    });
+    syncFloatingExtent();
   });
 }
 
@@ -527,6 +514,12 @@ function handleOutputPanelMessageRendered() {
     scrollHeight: panel?.scrollHeight,
     clientHeight: panel?.clientHeight,
   });
+  notifyContentChange();
+}
+
+function handleOutputPanelContentResized() {
+  if (outputPanelInitialFollowPending.value) return;
+  notifyContentChange();
 }
 
 const runningToolIds = reactive(new Set<string>());
@@ -1530,8 +1523,9 @@ function buildComposerDraftFromUserMessage(payload: {
       entry.sessionId === payload.sessionId &&
       entry.messageId === payload.messageId,
   );
-  const messageInput = message?.content ?? messageEntry?.content ?? '';
-  const sourceAttachments = message?.attachments ?? messageEntry?.attachments ?? [];
+  const messageInput = (message ? msg.getTextContent(payload.messageId) : '') || messageEntry?.content || '';
+  const sourceAttachments =
+    (message ? msg.getImageAttachments(payload.messageId) : undefined) ?? messageEntry?.attachments ?? [];
   const attachmentsForDraft: Attachment[] = sourceAttachments.map((item) => ({
     id: item.id,
     filename: item.filename,
@@ -3652,19 +3646,7 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
       }
     >();
 
-    msg.loadHistory(
-      history.map((entry) => ({
-        id: entry.id,
-        sessionId,
-        parentId: entry.parentID,
-        role: entry.role === 'user' ? 'user' : 'assistant',
-        content: entry.text,
-        status: entry.finish === 'error' ? 'error' : 'complete',
-        time: entry.messageTime,
-        usage: entry.usage ?? undefined,
-        attachments: entry.attachments,
-      })),
-    );
+    msg.loadHistory(data);
 
     history.forEach((entry) => {
       storeUserMessageMeta(entry.id, entry.meta);
@@ -4473,16 +4455,10 @@ async function reloadSelectedSessionState() {
   todoErrorBySessionId.value = {};
   if (selectedSessionId.value) {
     await fetchHistory(selectedSessionId.value);
-    nextTick(() => {
-      runWithoutOutputPanelTracking(() => {
-        scrollOutputPanelToBottom(false);
-      });
-      requestAnimationFrame(() => {
-        runWithoutOutputPanelTracking(() => {
-          scrollOutputPanelToBottom(false);
-        });
-      });
-    });
+    if (msg.roots.value.length === 0) {
+      outputPanelInitialFollowPending.value = false;
+      resumeOutputPanelTracking({ syncToBottom: true });
+    }
     await restoreShellSessions(selectedSessionId.value);
     void reloadTodosForAllowedSessions();
     void refreshSessionDiff();
@@ -7766,6 +7742,11 @@ onMounted(() => {
   updateFloatingExtentObserver();
   globalEventUnsubscribers.push(
     ge.on('connection.open', () => {
+      if (connectionState.value === 'reconnecting' || connectionState.value === 'error') {
+        connectionState.value = 'ready';
+        reconnectingMessage.value = '';
+        sendStatus.value = 'Ready';
+      }
       if (bootstrapReady.value) {
         void reconcileSessionGraphFromScopes();
         return;
@@ -7775,6 +7756,9 @@ onMounted(() => {
   );
   globalEventUnsubscribers.push(
     ge.on('connection.reconnected', () => {
+      connectionState.value = 'ready';
+      reconnectingMessage.value = '';
+      sendStatus.value = 'Ready';
       void reconcileSessionGraphFromScopes();
       void fetchProviders(true);
     }),

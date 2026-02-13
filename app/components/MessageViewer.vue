@@ -41,19 +41,23 @@ async function startRender() {
     theme: props.theme,
     gutterMode: 'none',
   })
-    .then((html) => {
+    .then(async (html) => {
       if (current !== state.requestId) return;
       state.html = html;
       state.error = '';
       state.isLoading = false;
+      await nextTick();
+      if (current !== state.requestId) return;
       emit('rendered');
     })
-    .catch((error) => {
+    .catch(async (error) => {
       if (current !== state.requestId) return;
       if (!state.html) {
         state.error = error instanceof Error ? error.message : 'Render failed';
       }
       state.isLoading = false;
+      await nextTick();
+      if (current !== state.requestId) return;
       emit('rendered');
     });
 }
