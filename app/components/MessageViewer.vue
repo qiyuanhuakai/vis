@@ -250,20 +250,22 @@ onBeforeUnmount(() => {
   color: #79B8FF;
 }
 
-.message-content :deep(.markdown-host pre:not(.shiki)) {
+.message-content :deep(.markdown-host pre) {
+  margin: 0.3em 0;
   padding: 0.45em 0.6em;
   border-radius: 6px;
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.18);
   overflow-x: auto;
 }
 
-.message-content :deep(.markdown-host pre:not(.shiki) code) {
+.message-content :deep(.markdown-host pre code) {
   display: block;
   white-space: pre;
   background: transparent;
   border: 0;
   padding: 0;
+  color: inherit;
 }
 
 </style>
