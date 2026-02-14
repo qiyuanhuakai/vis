@@ -3,7 +3,7 @@ import type { GlobalEventMap, SseEnvelope } from '../types/sse';
 import { TypedEmitter } from '../utils/eventEmitter';
 
 type EventKey = keyof GlobalEventMap;
-type ConnectionOptions = { failFast?: boolean; timeoutMs?: number };
+type ConnectionOptions = { failFast?: boolean; timeoutMs?: number; authorization?: string };
 
 export type SessionScope = {
   on<K extends EventKey>(event: K, listener: (payload: GlobalEventMap[K]) => void): () => void;
@@ -126,10 +126,11 @@ function computeAllowedSessionIds(
 
 export function useGlobalEvents(baseUrl: string) {
   const emitter = new TypedEmitter<GlobalEventMap>();
-  let source: EventSource | undefined;
+  let abortController: AbortController | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
   let disconnectRequested = false;
+  let connectionResolved = false;
 
   function routeEnvelope(envelope: SseEnvelope) {
     const type = envelope.payload.type;
@@ -137,74 +138,159 @@ export function useGlobalEvents(baseUrl: string) {
     emitter.emit(type, envelope.payload.properties as GlobalEventMap[typeof type]);
   }
 
+  let openResolver: ((value: void) => void) | null = null;
+  let openRejector: ((reason: Error) => void) | null = null;
+
   function waitForOpen(timeoutMs = 5000) {
     return new Promise<void>((resolve, reject) => {
-      const current = source;
-      if (!current) {
+      if (!abortController) {
         reject(new Error('SSE connection is not initialized.'));
         return;
       }
-      if (current.readyState === EventSource.OPEN) {
+      if (connectionResolved) {
         resolve();
         return;
       }
-      const onOpen = () => {
-        cleanup();
-        resolve();
-      };
-      const onError = () => {
-        cleanup();
-        reject(new Error('SSE connection failed.'));
-      };
       const timer = setTimeout(() => {
-        cleanup();
+        openResolver = null;
+        openRejector = null;
         reject(new Error('SSE connection timed out.'));
       }, timeoutMs);
-      const cleanup = () => {
+      openResolver = (value) => {
         clearTimeout(timer);
-        current.removeEventListener('open', onOpen);
-        current.removeEventListener('error', onError);
+        resolve(value);
+        openResolver = null;
+        openRejector = null;
       };
-      current.addEventListener('open', onOpen, { once: true });
-      current.addEventListener('error', onError, { once: true });
+      openRejector = (error) => {
+        clearTimeout(timer);
+        reject(error);
+        openResolver = null;
+        openRejector = null;
+      };
     });
   }
 
   async function connect(options: ConnectionOptions = {}) {
     disconnectRequested = false;
-    if (source) {
+    if (abortController) {
       if (options.failFast) await waitForOpen(options.timeoutMs ?? 5000);
       return;
     }
 
     const isReconnect = reconnectAttempt > 0;
-    source = new EventSource(`${baseUrl}/global/event`);
+    abortController = new AbortController();
+    connectionResolved = false;
 
-    source.addEventListener('open', () => {
+    const headers: Record<string, string> = {};
+    if (options.authorization) {
+      headers['Authorization'] = options.authorization;
+    }
+
+    try {
+      const response = await fetch(`${baseUrl}/global/event`, {
+        signal: abortController.signal,
+        headers,
+      });
+
+      if (response.status === 401) {
+        abortController = undefined;
+        emitter.emit('connection.error', { message: 'Authentication failed.', statusCode: 401 });
+        if (openRejector) {
+          openRejector(new Error('Authentication failed.'));
+        }
+        return;
+      }
+
+      if (!response.ok || !response.body) {
+        abortController = undefined;
+        emitter.emit('connection.error', { message: `HTTP ${response.status}` });
+        if (openRejector) {
+          openRejector(new Error(`HTTP ${response.status}`));
+        }
+        if (!disconnectRequested && !reconnectTimer) {
+          reconnectAttempt += 1;
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            void connect(options);
+          }, 1000);
+        }
+        return;
+      }
+
       reconnectAttempt = 0;
+      connectionResolved = true;
       emitter.emit('connection.open', {});
       if (isReconnect) {
         emitter.emit('connection.reconnected', {});
       }
-    });
+      if (openResolver) {
+        openResolver();
+      }
 
-    source.addEventListener('message', (event) => {
-      const envelope = parseEnvelope(event.data);
-      if (!envelope) return;
-      routeEnvelope(envelope);
-    });
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
 
-    source.addEventListener('error', () => {
-      emitter.emit('connection.error', { message: 'SSE connection error.' });
-      source?.close();
-      source = undefined;
-      if (disconnectRequested || reconnectTimer) return;
-      reconnectAttempt += 1;
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        void connect();
-      }, 1000);
-    });
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const dataPrefix = 'data: ';
+            if (line.startsWith(dataPrefix)) {
+              const jsonStr = line.slice(dataPrefix.length);
+              const envelope = parseEnvelope(jsonStr);
+              if (envelope) {
+                routeEnvelope(envelope);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        if (abortController?.signal.aborted) {
+          return;
+        }
+        throw error;
+      }
+
+      emitter.emit('connection.error', { message: 'SSE stream closed.' });
+      abortController = undefined;
+      connectionResolved = false;
+
+      if (!disconnectRequested && !reconnectTimer) {
+        reconnectAttempt += 1;
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          void connect(options);
+        }, 1000);
+      }
+    } catch (error) {
+      abortController = undefined;
+      connectionResolved = false;
+
+      if (disconnectRequested) return;
+
+      emitter.emit('connection.error', { message: String(error) });
+      if (openRejector) {
+        openRejector(error instanceof Error ? error : new Error(String(error)));
+      }
+
+      if (!reconnectTimer) {
+        reconnectAttempt += 1;
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          void connect(options);
+        }, 1000);
+      }
+    }
 
     if (options.failFast) await waitForOpen(options.timeoutMs ?? 5000);
   }
@@ -215,8 +301,9 @@ export function useGlobalEvents(baseUrl: string) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    source?.close();
-    source = undefined;
+    abortController?.abort();
+    abortController = undefined;
+    connectionResolved = false;
   }
 
   function on<K extends EventKey>(event: K, listener: (payload: GlobalEventMap[K]) => void): () => void;

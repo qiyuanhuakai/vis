@@ -422,8 +422,10 @@ function handleOpenDirectory(close: () => void) {
 
 .top-left {
   flex: 0 0 auto;
-  font-size: 12px;
-  color: #e2e8f0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #f1f5f9;
 }
 
 .top-center {
