@@ -1,5 +1,5 @@
 import MarkdownIt from 'markdown-it';
-//import { fromHighlighter } from '@shikijs/markdown-it/core';
+import Shiki from '@shikijs/markdown-it';
 import { bundledLanguages, createHighlighter } from 'shiki/bundle/web';
 
 type RenderRequest = {
@@ -715,24 +715,26 @@ async function renderCodeHtml(request: RenderRequest) {
 let cachedMd: MarkdownIt | null = null;
 let cachedMdTheme = '';
 
-function getMarkdownIt(highlighter: Awaited<ReturnType<typeof createHighlighter>>, theme: string) {
+async function getMarkdownIt(highlighter: Awaited<ReturnType<typeof createHighlighter>>, theme: string) {
   if (!cachedMd || cachedMdTheme !== theme) {
     cachedMdTheme = theme;
     cachedMd = new MarkdownIt({ html: false, linkify: false, breaks: true });
-    /*
     cachedMd.use(
-      fromHighlighter(highlighter, {
-        theme,
+      await Shiki({
+        themes
+      : {
+          light: theme,
+          dark: theme,
+        }
       }),
     );
-    */
   }
   return cachedMd;
 }
 
 async function renderMarkdownHtml(request: RenderRequest): Promise<string> {
   const highlighter = await getHighlighter(request.theme);
-  const md = getMarkdownIt(highlighter, request.theme);
+  const md = await getMarkdownIt(highlighter, request.theme);
   const rendered = md.render(request.code);
   return `<div class="markdown-host">${rendered}</div>`;
 }
