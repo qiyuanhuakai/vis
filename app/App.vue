@@ -35,6 +35,7 @@
                 :get-final-answer="msg.getFinalAnswer"
                 :has-text-content="msg.hasTextContent"
                 :get-text-content="msg.getTextContent"
+                :get-parts="msg.getParts"
                 :get-image-attachments="msg.getImageAttachments"
                 :get-status="msg.getStatus"
                 :get-usage="msg.getUsage"
@@ -55,7 +56,8 @@
                 @fork-message="handleForkMessage"
                 @revert-message="handleRevertMessage"
                 @show-message-diff="handleShowMessageDiff"
-                @show-message-history="handleShowMessageHistory"
+                @show-thread-history="handleShowThreadHistory"
+                @edit-message="handleEditMessage"
                 @open-image="handleOpenImage"
                 @content-resized="handleOutputPanelContentResized"
                 @initial-render-complete="handleOutputPanelInitialRenderComplete"
@@ -260,7 +262,9 @@ import { useGlobalEvents } from './composables/useGlobalEvents';
 import { useMessages } from './composables/useMessages';
 import { useReasoningWindows, type ReasoningFinish } from './composables/useReasoningWindows';
 import { renderWorkerHtml } from './utils/workerRenderer';
+import type { MessageInfo, MessagePart } from './types/sse';
 import { extractFileRead as extractToolFileRead, extractPatch as extractToolPatch } from './utils/toolRenderers';
+import ThreadHistoryWindow from './components/ThreadHistoryWindow.vue';
 import * as opencodeApi from './utils/opencode';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { createSessionGraphStore } from './utils/sessionGraph';
@@ -270,7 +274,7 @@ const credentials = useCredentials();
 const FOLLOW_THRESHOLD_PX = 24;
 const TOOL_PENDING_TTL_MS = 60_000;
 const TOOL_COMPLETE_TTL_MS = 2_000;
-const SUBAGENT_ACTIVE_TTL_MS = 60 * 60 * 1000;
+
 const CHILD_SESSION_PRUNE_TTL_MS = 20 * 60 * 1000;
 const ROOT_SESSION_BOOTSTRAP_LIMIT = 100_000;
 const SIDE_PANEL_COLLAPSED_STORAGE_KEY = 'opencode.sidePanelCollapsed.v1';
@@ -306,89 +310,7 @@ const COMPOSER_DRAFT_STORAGE_KEY = 'opencode.composerDrafts.v1';
 const AUTH_ERROR_STORAGE_KEY = 'opencode.lastAuthError.v1';
 const ATTACHMENT_MIME_ALLOWLIST = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
-type FileReadEntry = {
-  time: number;
-  expiresAt: number;
-  x: number;
-  y: number;
-  header: string;
-  path?: string;
-  content: string;
-  scroll: boolean;
-  scrollDistance: number;
-  scrollDuration: number;
-  scrollDelay: number;
-  html: string;
-  attachments?: MessageAttachment[];
-  isWrite: boolean;
-  isMessage: boolean;
-  isQuestionAnswer?: boolean;
-  isSubagentMessage?: boolean;
-  isShell?: boolean;
-  isPermission?: boolean;
-  isQuestion?: boolean;
-  sessionId?: string;
-  toolKey?: string;
-  role?: 'user' | 'assistant';
-  toolStatus?: string;
-  toolName?: string;
-  toolTitle?: string;
-  lang?: string;
-  view?: 'normal' | 'diff' | 'hex';
-  grepPattern?: string;
-  toolWrapMode?: 'default' | 'soft';
-  toolGutterMode?: 'default' | 'none' | 'grep-source';
-  toolGutterLines?: string[];
-  messageId?: string;
-  messageKey?: string;
-  messageAgent?: string;
-  messageModel?: string;
-  messageProviderId?: string;
-  messageModelId?: string;
-  messageUsage?: MessageUsage;
-  messageVariant?: string;
-  messageTime?: number;
-  callId?: string;
-  permissionId?: string;
-  questionId?: string;
-  follow?: boolean;
-  zIndex?: number;
-  width?: number;
-  height?: number;
-  shellId?: string;
-  shellTitle?: string;
-  permissionRequest?: PermissionRequest;
-  questionRequest?: QuestionRequest;
-  isBinary?: boolean;
-  isLoading?: boolean;
-  isDiff?: boolean;
-  diffCode?: string;
-  diffAfter?: string;
-  diffTabs?: Array<{ file: string; before: string; after: string }>;
-  classification?: 'real_user' | 'system_injection' | 'unknown';
-  contentKey?: string;
-  readLineOffset?: number;
-  readLineLimit?: number;
-  isRound?: boolean;
-  roundId?: string;
-  roundMessages?: RoundMessage[];
-  roundDiffs?: MessageDiffEntry[];
-  messageError?: { name: string; message: string } | null;
-};
 
-type RoundMessage = {
-  messageId: string;
-  role: 'user' | 'assistant';
-  content: string;
-  attachments?: MessageAttachment[];
-  agent?: string;
-  model?: string;
-  providerId?: string;
-  modelId?: string;
-  variant?: string;
-  time?: number;
-  usage?: MessageUsage;
-};
 
 type TodoItem = {
   id: string;
@@ -427,6 +349,11 @@ type FileContentResponse = {
   content?: string;
   encoding?: string;
   type?: 'text' | 'binary';
+};
+
+type ThreadHistoryPayload = {
+  root: MessageInfo;
+  messages: MessageInfo[];
 };
 
 type SessionDiffEntry = {
@@ -521,14 +448,13 @@ type ComposerDraft = {
   writerTabId: string;
 };
 
-const queue = ref<FileReadEntry[]>([]);
 const fw = useFloatingWindows();
 const appEl = ref<HTMLDivElement | null>(null);
 const outputEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLElement | null>(null);
 const toolWindowCanvasEl = ref<HTMLDivElement | null>(null);
 const outputPanelRef = ref<{ panelEl: HTMLDivElement | null } | null>(null);
-const inputPanelRef = ref<{ focus: () => void } | null>(null);
+const inputPanelRef = ref<{ focus: () => void; reset: () => void } | null>(null);
 const outputPanelContainerEl = computed(() => outputPanelRef.value?.panelEl ?? undefined);
 const outputPanelScrollMode = computed<ScrollMode>(() => 'follow');
 const {
@@ -565,7 +491,7 @@ function handleOutputPanelContentResized() {
 }
 
 const runningToolIds = reactive(new Set<string>());
-const subagentSessionExpiry = new Map<string, number>();
+
 const messageSummaryTitleByMessageId = ref<Record<string, string>>({});
 type MessageDiffEntry = { file: string; diff: string; before?: string; after?: string };
 type SessionStatusType = 'busy' | 'idle' | 'retry';
@@ -575,27 +501,6 @@ const userMessageMetaById = ref<Record<string, UserMessageMeta>>({});
 const userMessageTimeById = ref<Record<string, number>>({});
 const globalEventUnsubscribers: Array<() => void> = [];
 
-const dragState = ref<{
-  entry: FileReadEntry;
-  startX: number;
-  startY: number;
-  startLeft: number;
-  startTop: number;
-  maxX: number;
-  maxY: number;
-  toolTop: number;
-} | null>(null);
-const resizeState = ref<{
-  entry: FileReadEntry;
-  startX: number;
-  startY: number;
-  startWidth: number;
-  startHeight: number;
-  minWidth: number;
-  minHeight: number;
-  maxWidth: number;
-  maxHeight: number;
-} | null>(null);
 const inputResizeState = ref<{
   startY: number;
   startHeight: number;
@@ -603,7 +508,6 @@ const inputResizeState = ref<{
   maxHeight: number;
 } | null>(null);
 const inputHeight = ref<number | null>(null);
-let nextWindowZIndex = 10000;
 let sessionStatusRequestId = 0;
 let primaryHistoryRequestId = 0;
 const recentUserInputs: { text: string; time: number }[] = [];
@@ -642,7 +546,6 @@ const sessionDiffEntries = ref<SessionDiffEntry[]>([]);
 const sessionDiffByPath = ref<Record<string, SessionDiffEntry>>({});
 let treeRequestId = 0;
 let sessionDiffRequestId = 0;
-// fileViewerQueue removed — file viewers now use fw.open()
 
 type ProjectInfo = {
   id: string;
@@ -1375,9 +1278,6 @@ function replaceQuerySelection(projectId: string, sessionId: string) {
   window.history.replaceState({}, '', url.toString());
 }
 
-function messageStorageKey(messageId: string, sessionId?: string) {
-  return `${sessionId ?? 'root'}:${messageId}`;
-}
 
 function buildComposerContextKey(projectId: string, sessionId: string) {
   const normalizedProjectId = projectId.trim();
@@ -1778,17 +1678,9 @@ function buildComposerDraftFromUserMessage(payload: {
   messageId: string;
 }): Omit<ComposerDraft, 'rev' | 'writerTabId'> {
   const message = msg.get(payload.messageId);
-  const messageEntry = queue.value.find(
-    (entry) =>
-      entry.isMessage &&
-      !entry.isSubagentMessage &&
-      entry.role === 'user' &&
-      entry.sessionId === payload.sessionId &&
-      entry.messageId === payload.messageId,
-  );
-  const messageInput = (message ? msg.getTextContent(payload.messageId) : '') || messageEntry?.content || '';
+  const messageInput = (message ? msg.getTextContent(payload.messageId) : '') || '';
   const sourceAttachments =
-    (message ? msg.getImageAttachments(payload.messageId) : undefined) ?? messageEntry?.attachments ?? [];
+    (message ? msg.getImageAttachments(payload.messageId) : undefined) ?? [];
   const attachmentsForDraft: Attachment[] = sourceAttachments.map((item) => ({
     id: item.id,
     filename: item.filename,
@@ -1827,14 +1719,6 @@ function clamp(value: number, min: number, max: number) {
   if (value < min) return min;
   if (value > max) return max;
   return value;
-}
-
-function syncNextWindowZIndex(entries: FileReadEntry[] = queue.value) {
-  let maxZ = nextWindowZIndex;
-  entries.forEach((entry) => {
-    if (typeof entry.zIndex === 'number' && entry.zIndex > maxZ) maxZ = entry.zIndex;
-  });
-  nextWindowZIndex = maxZ;
 }
 
 function getSessionStatus(sessionId: string, projectId?: string) {
@@ -1902,12 +1786,6 @@ function syncSessionStatuses(entries: [string, SessionStatusType][], projectId?:
   if (!projectId) return;
   sessionGraphStore.syncStatusesForProject(projectId, entries);
   markSessionGraphChanged();
-}
-
-function nextWindowZ() {
-  syncNextWindowZIndex();
-  nextWindowZIndex += 1;
-  return nextWindowZIndex;
 }
 
 function measureTerminalCellWidth(fontFamily: string, fontSizePx: number) {
@@ -1983,11 +1861,6 @@ function updateFloatingExtentObserver() {
   }
   floatingExtentObservedEl = nextEl ?? null;
   if (nextEl) syncFloatingExtent();
-}
-
-function bringToFront(entry: FileReadEntry) {
-  const z = nextWindowZ();
-  entry.zIndex = entry.isShell ? SHELL_WINDOW_Z_BASE + z : z;
 }
 
 function getCanvasMetrics() {
@@ -2244,28 +2117,6 @@ function pickShikiTheme(names: string[]) {
   return darkMatch ?? names[0];
 }
 
-function getSubagentExpiry(sessionId?: string) {
-  const now = Date.now();
-  if (!sessionId) return now + SUBAGENT_ACTIVE_TTL_MS;
-  const stored = subagentSessionExpiry.get(sessionId);
-  if (stored !== undefined) return stored;
-  const status = getSessionStatus(sessionId);
-  if (status === 'busy' || status === 'retry') return Number.MAX_SAFE_INTEGER;
-  if (status === 'idle') return now;
-  return now + SUBAGENT_ACTIVE_TTL_MS;
-}
-
-function updateSubagentExpiry(sessionId: string, status: 'busy' | 'idle') {
-  const now = Date.now();
-  const expiresAt = status === 'idle' ? now : Number.MAX_SAFE_INTEGER;
-  subagentSessionExpiry.set(sessionId, expiresAt);
-  queue.value.forEach((entry) => {
-    if (entry.sessionId === sessionId && entry.isSubagentMessage) {
-      entry.expiresAt = expiresAt;
-    }
-  });
-}
-
 function startInputResize(event: PointerEvent) {
   if (event.button !== 0) return;
   const output = outputEl.value;
@@ -2288,83 +2139,6 @@ function startInputResize(event: PointerEvent) {
   event.preventDefault();
 }
 
-function startTermDrag(entry: FileReadEntry, event: PointerEvent) {
-  if (event.button !== 0) return;
-  resizeState.value = null;
-  const metrics = getCanvasMetrics();
-  if (!metrics) return;
-  const termEl = (event.currentTarget as HTMLElement).closest('.term') as HTMLElement | null;
-  const { canvasRect, toolTop, toolAreaHeight, termWidth, termHeight } = metrics;
-  const termRect = termEl?.getBoundingClientRect();
-  const resolvedWidth = termRect?.width ?? termWidth;
-  const resolvedHeight = termRect?.height ?? termHeight;
-  const maxX = Math.max(0, canvasRect.width - resolvedWidth);
-  const maxY = Math.max(0, toolAreaHeight - resolvedHeight);
-  const startLeft = termRect ? termRect.left - canvasRect.left : entry.x;
-  const startTop = termRect ? termRect.top - canvasRect.top : toolTop + entry.y;
-  dragState.value = {
-    entry,
-    startX: event.clientX,
-    startY: event.clientY,
-    startLeft,
-    startTop,
-    maxX,
-    maxY,
-    toolTop,
-  };
-  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-  event.preventDefault();
-}
-
-function startTermResize(entry: FileReadEntry, event: PointerEvent) {
-  if (event.button !== 0) return;
-  dragState.value = null;
-  const metrics = getCanvasMetrics();
-  if (!metrics) return;
-  const termEl = (event.currentTarget as HTMLElement).closest('.term') as HTMLElement | null;
-  const termRect = termEl?.getBoundingClientRect();
-  if (!termRect) return;
-  const { canvasRect, toolTop, toolAreaHeight } = metrics;
-  const offsetLeft = termRect.left - canvasRect.left;
-  const offsetTop = termRect.top - canvasRect.top;
-  const maxWidth = Math.max(200, canvasRect.width - offsetLeft);
-  const maxHeight = Math.max(200, toolTop + toolAreaHeight - offsetTop);
-  const isFileViewer = entry.toolKey?.startsWith('file-viewer:');
-  const minWidth = entry.isPermission
-    ? PERMISSION_WINDOW_MIN_WIDTH
-    : entry.isQuestion
-      ? QUESTION_WINDOW_MIN_WIDTH
-      : isFileViewer
-        ? FILE_VIEWER_WINDOW_MIN_WIDTH
-        : 320;
-  const minHeight = entry.isPermission
-    ? PERMISSION_WINDOW_MIN_HEIGHT
-    : entry.isQuestion
-      ? QUESTION_WINDOW_MIN_HEIGHT
-      : isFileViewer
-        ? FILE_VIEWER_WINDOW_MIN_HEIGHT
-        : 220;
-  resizeState.value = {
-    entry,
-    startX: event.clientX,
-    startY: event.clientY,
-    startWidth: termRect.width,
-    startHeight: termRect.height,
-    minWidth,
-    minHeight,
-    maxWidth,
-    maxHeight,
-  };
-  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-  event.stopPropagation();
-  event.preventDefault();
-}
-
-function focusTerm(entry: FileReadEntry, event: PointerEvent) {
-  if (event.button !== 0) return;
-  bringToFront(entry);
-}
-
 function handlePointerMove(event: PointerEvent) {
   if (inputResizeState.value) {
     const { startY, startHeight, minHeight, maxHeight } = inputResizeState.value;
@@ -2374,38 +2148,9 @@ function handlePointerMove(event: PointerEvent) {
     scheduleShellFitAll();
     return;
   }
-  if (resizeState.value) {
-    const {
-      entry,
-      startX,
-      startY,
-      startWidth,
-      startHeight,
-      minWidth,
-      minHeight,
-      maxWidth,
-      maxHeight,
-    } = resizeState.value;
-    const dx = event.clientX - startX;
-    const dy = event.clientY - startY;
-    entry.width = clamp(startWidth + dx, minWidth, maxWidth);
-    entry.height = clamp(startHeight + dy, minHeight, maxHeight);
-    if (entry.isShell && entry.shellId) scheduleShellFit(entry.shellId);
-    return;
-  }
-  if (!dragState.value) return;
-  const { entry, startX, startY, startLeft, startTop, maxX, maxY, toolTop } = dragState.value;
-  const dx = event.clientX - startX;
-  const dy = event.clientY - startY;
-  const nextLeft = clamp(startLeft + dx, 0, maxX);
-  const nextTop = clamp(startTop + dy, toolTop, toolTop + maxY);
-  entry.x = nextLeft;
-  entry.y = nextTop - toolTop;
 }
 
 function handlePointerUp() {
-  dragState.value = null;
-  resizeState.value = null;
   if (inputResizeState.value) scheduleShellFitAll();
   inputResizeState.value = null;
 }
@@ -3246,7 +2991,6 @@ async function fetchProviders(force = false) {
       selectedThinking.value = thinkingOptions.value[0];
       log('providers thinking set', selectedThinking.value);
     }
-    refreshMessageUsageContextPercent();
     providersLoaded.value = true;
     log('providers fetch done');
   } catch (error) {
@@ -3734,131 +3478,6 @@ function parseUsageUpdate(payload: unknown, eventType: string) {
   return { messageId, sessionId, usage };
 }
 
-function resolveUserMessageDisplay(meta: UserMessageMeta | null): UserMessageDisplay | null {
-  if (!meta) return null;
-  const model = formatUserMessageModel(meta);
-  const hasAny = Boolean(meta.agent || model || meta.variant);
-  if (!hasAny) return null;
-  return {
-    agent: meta.agent,
-    model,
-    variant: meta.variant,
-  };
-}
-
-function applyMessageUsageToQueue(
-  messageId: string,
-  sessionId: string | undefined,
-  usage: MessageUsage,
-) {
-  const index = queue.value.findIndex((entry) => {
-    if (!entry.isMessage) return false;
-    if (sessionId && entry.sessionId && entry.sessionId !== sessionId) return false;
-    if (entry.messageId === messageId) return true;
-    return Boolean(entry.isRound && (entry.roundMessages ?? []).some((item) => item.messageId === messageId));
-  });
-  const updateRoundEntry = (entryIndex: number) => {
-    const existing = queue.value[entryIndex];
-    if (!existing || !existing.isMessage || !existing.isRound) return false;
-    if (sessionId && existing.sessionId && existing.sessionId !== sessionId) return false;
-    const existingRoundMessages = existing.roundMessages ?? [];
-    const roundMessageIndex = existingRoundMessages.findIndex(
-      (entry) => entry.messageId === messageId,
-    );
-    if (roundMessageIndex < 0) return false;
-    const currentRoundMessage = existingRoundMessages[roundMessageIndex];
-    if (!currentRoundMessage) return false;
-    const providerId =
-      usage.providerId ?? currentRoundMessage.providerId ?? existing.messageProviderId;
-    const modelId = usage.modelId ?? currentRoundMessage.modelId ?? existing.messageModelId;
-    const contextPercent =
-      usage.contextPercent ?? computeContextPercent(usage.tokens, providerId, modelId);
-    const nextRoundMessage: RoundMessage = {
-      ...currentRoundMessage,
-      providerId: providerId ?? undefined,
-      modelId: modelId ?? undefined,
-      usage: {
-        ...usage,
-        providerId: providerId ?? undefined,
-        modelId: modelId ?? undefined,
-        contextPercent,
-      },
-    };
-    const nextRoundMessages = [...existingRoundMessages];
-    nextRoundMessages.splice(roundMessageIndex, 1, nextRoundMessage);
-    queue.value.splice(entryIndex, 1, {
-      ...existing,
-      messageProviderId:
-        existing.messageId === messageId ? (providerId ?? undefined) : existing.messageProviderId,
-      messageModelId:
-        existing.messageId === messageId ? (modelId ?? undefined) : existing.messageModelId,
-      messageUsage:
-        existing.messageId === messageId
-          ? {
-              ...usage,
-              providerId: providerId ?? undefined,
-              modelId: modelId ?? undefined,
-              contextPercent,
-            }
-          : existing.messageUsage,
-      roundMessages: nextRoundMessages,
-    });
-    return true;
-  };
-  const updateEntry = (entryIndex: number) => {
-    const existing = queue.value[entryIndex];
-    if (!existing || !existing.isMessage) return;
-    const providerId = usage.providerId ?? existing.messageProviderId;
-    const modelId = usage.modelId ?? existing.messageModelId;
-    const contextPercent =
-      usage.contextPercent ?? computeContextPercent(usage.tokens, providerId, modelId);
-    queue.value.splice(entryIndex, 1, {
-      ...existing,
-      messageProviderId: providerId,
-      messageModelId: modelId,
-      messageUsage: {
-        ...usage,
-        providerId: providerId ?? undefined,
-        modelId: modelId ?? undefined,
-        contextPercent,
-      },
-    });
-  };
-  if (index !== undefined) {
-    if (updateRoundEntry(index)) return;
-    updateEntry(index);
-    return;
-  }
-  queue.value.forEach((entry, entryIndex) => {
-    if (!entry.isMessage) return;
-    if (sessionId && entry.sessionId && entry.sessionId !== sessionId) return;
-    if (updateRoundEntry(entryIndex)) return;
-    if (entry.messageId !== messageId) return;
-    updateEntry(entryIndex);
-  });
-}
-
-function refreshMessageUsageContextPercent() {
-  queue.value.forEach((entry, index) => {
-    if (!entry.isMessage || !entry.messageUsage) return;
-    const usage = entry.messageUsage;
-    const providerId = usage.providerId ?? entry.messageProviderId;
-    const modelId = usage.modelId ?? entry.messageModelId;
-    const contextPercent = computeContextPercent(usage.tokens, providerId, modelId);
-    queue.value.splice(index, 1, {
-      ...entry,
-      messageProviderId: providerId,
-      messageModelId: modelId,
-      messageUsage: {
-        ...usage,
-        providerId: providerId ?? undefined,
-        modelId: modelId ?? undefined,
-        contextPercent,
-      },
-    });
-  });
-}
-
 function storeUserMessageMeta(messageId: string | undefined, meta: UserMessageMeta | null) {
   if (!messageId || !meta) return;
   userMessageMetaById.value = { ...userMessageMetaById.value, [messageId]: meta };
@@ -3891,87 +3510,6 @@ function resolveUserMessageTimeForMessage(
   return undefined;
 }
 
-function applyUserMessageMetaToQueue(messageId: string, meta: UserMessageMeta) {
-  const displayMeta = resolveUserMessageDisplay(meta);
-  if (!displayMeta) return;
-  queue.value.forEach((entry, index) => {
-    if (!entry.isMessage) return;
-    if (entry.isRound && entry.roundMessages) {
-      const existingRoundMessages = entry.roundMessages;
-      const roundMessageIndex = existingRoundMessages.findIndex(
-        (roundEntry) => roundEntry.messageId === messageId,
-      );
-      if (roundMessageIndex >= 0) {
-        const roundMessage = existingRoundMessages[roundMessageIndex];
-        if (!roundMessage) return;
-        const nextRoundMessages = [...existingRoundMessages];
-        nextRoundMessages.splice(roundMessageIndex, 1, {
-          ...roundMessage,
-          agent: displayMeta.agent ?? roundMessage.agent,
-          model: displayMeta.model ?? roundMessage.model,
-          variant: displayMeta.variant ?? roundMessage.variant,
-        });
-        queue.value.splice(index, 1, {
-          ...entry,
-          messageAgent:
-            entry.messageId === messageId
-              ? (displayMeta.agent ?? entry.messageAgent)
-              : entry.messageAgent,
-          messageModel:
-            entry.messageId === messageId
-              ? (displayMeta.model ?? entry.messageModel)
-              : entry.messageModel,
-          messageVariant:
-            entry.messageId === messageId
-              ? (displayMeta.variant ?? entry.messageVariant)
-              : entry.messageVariant,
-          roundMessages: nextRoundMessages,
-        });
-        return;
-      }
-    }
-    if (entry.messageId !== messageId) return;
-    queue.value.splice(index, 1, {
-      ...entry,
-      messageAgent: displayMeta.agent ?? entry.messageAgent,
-      messageModel: displayMeta.model ?? entry.messageModel,
-      messageVariant: displayMeta.variant ?? entry.messageVariant,
-    });
-  });
-}
-
-function applyUserMessageTimeToQueue(messageId: string, messageTime: number) {
-  queue.value.forEach((entry, index) => {
-    if (!entry.isMessage) return;
-    if (entry.isRound && entry.roundMessages) {
-      const existingRoundMessages = entry.roundMessages;
-      const roundMessageIndex = existingRoundMessages.findIndex(
-        (roundEntry) => roundEntry.messageId === messageId,
-      );
-      if (roundMessageIndex >= 0) {
-        const roundMessage = existingRoundMessages[roundMessageIndex];
-        if (!roundMessage) return;
-        const nextRoundMessages = [...existingRoundMessages];
-        nextRoundMessages.splice(roundMessageIndex, 1, {
-          ...roundMessage,
-          time: messageTime,
-        });
-        queue.value.splice(index, 1, {
-          ...entry,
-          messageTime: entry.messageId === messageId ? messageTime : entry.messageTime,
-          roundMessages: nextRoundMessages,
-        });
-        return;
-      }
-    }
-    if (entry.messageId !== messageId) return;
-    queue.value.splice(index, 1, {
-      ...entry,
-      messageTime,
-    });
-  });
-}
-
 async function fetchHistory(sessionId: string, isSubagentMessage = false) {
   if (!sessionId) return;
   const requestId = !isSubagentMessage ? ++primaryHistoryRequestId : 0;
@@ -3987,245 +3525,17 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
       if (selectedSessionId.value !== sessionId) return;
       if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
     }
-    const history: Array<{
-      id: string;
-      role?: string;
-      parentID?: string;
-      finish?: string;
-      text: string;
-      attachments: MessageAttachment[];
-      meta: UserMessageMeta | null;
-      usage: MessageUsage | null;
-      messageTime?: number;
-      info?: Record<string, unknown>;
-      sourceIndex: number;
-    }> = [];
-
-    data.forEach((message, sourceIndex) => {
-      const info = message.info as Record<string, unknown> | undefined;
-      const parts = message.parts as unknown;
-      const text = parseMessageTextFromParts(parts) ?? '';
-      const attachments = parseImageAttachmentsFromParts(parts);
-      const id = typeof info?.id === 'string' ? info.id : undefined;
-      const role = typeof info?.role === 'string' ? info.role : undefined;
-      const parentID = typeof info?.parentID === 'string' ? info.parentID : undefined;
-      const finish = typeof info?.finish === 'string' ? info.finish : undefined;
-      const meta = parseUserMessageMeta(info);
-      const usage = resolveMessageUsageFromInfo(info);
-      const messageTime = parseMessageTime(info);
-      if (!id) return;
-      if (!parentID && !text.trim() && attachments.length === 0) {
-        history.push({
-          id,
-          role,
-          parentID,
-          finish,
-          text,
-          attachments,
-          meta,
-          usage,
-          messageTime,
-          info,
-          sourceIndex,
-        });
-        return;
-      }
-      const hasError = info?.error && typeof info.error === 'object';
-      if (parentID && !text.trim() && attachments.length === 0 && !hasError) return;
-      history.push({
-        id,
-        role,
-        parentID,
-        finish,
-        text,
-        attachments,
-        meta,
-        usage,
-        messageTime,
-        info,
-        sourceIndex,
-      });
-    });
-    const historyMeta = new Map<
-      string,
-      {
-        displayMeta: ReturnType<typeof resolveUserMessageDisplay>;
-        resolvedTime?: number;
-        usageProviderId?: string;
-        usageModelId?: string;
-        historyUsage?: MessageUsage;
-      }
-    >();
-
     msg.loadHistory(data);
 
-    history.forEach((entry) => {
-      storeUserMessageMeta(entry.id, entry.meta);
-      const resolvedMeta = resolveUserMessageMetaForMessage(entry.id, undefined, entry.meta);
-      const displayMeta = resolveUserMessageDisplay(resolvedMeta);
-      storeUserMessageTime(entry.id, entry.messageTime);
-      const resolvedTime = resolveUserMessageTimeForMessage(entry.id, undefined, entry.messageTime);
-      const usageProviderId = entry.usage?.providerId ?? resolvedMeta?.providerId;
-      const usageModelId = entry.usage?.modelId ?? resolvedMeta?.modelId;
-      const historyUsage = entry.usage
-        ? {
-            ...entry.usage,
-            providerId: usageProviderId,
-            modelId: usageModelId,
-            contextPercent:
-              entry.usage.contextPercent ??
-              computeContextPercent(entry.usage.tokens, usageProviderId, usageModelId),
-          }
-        : undefined;
-
-      historyMeta.set(entry.id, {
-        displayMeta,
-        resolvedTime,
-        usageProviderId,
-        usageModelId,
-        historyUsage,
-      });
+    data.forEach((message) => {
+      const info = message.info as Record<string, unknown> | undefined;
+      const id = typeof info?.id === 'string' ? info.id : undefined;
+      if (!id) return;
+      const meta = parseUserMessageMeta(info);
+      const messageTime = parseMessageTime(info);
+      storeUserMessageMeta(id, meta);
+      storeUserMessageTime(id, messageTime);
     });
-
-    if (isSubagentMessage) {
-      history.forEach((entry) => {
-        const isUserEntry = entry.role === 'user';
-        const isAssistantEntry = !isUserEntry;
-        const messageKey = messageStorageKey(entry.id, sessionId);
-        if (queue.value.some((item) => item.messageKey === messageKey)) return;
-        const resolved = historyMeta.get(entry.id);
-        const header = '';
-        const time = Date.now();
-        const text = `${header}${entry.text}`;
-        const messageColumns = 52;
-        const visibleLines = 12;
-        const lines = countWrappedLines(text, messageColumns);
-        const overflowLines = Math.max(0, lines - visibleLines);
-        const lineHeight = 16;
-        const scrollDistance = Math.max(0, overflowLines * lineHeight);
-        const scrollDuration =
-          overflowLines > 0 ? Math.min(0.25, Math.max(0.08, overflowLines * 0.01)) : 0;
-        const expiresAt = getSubagentExpiry(sessionId);
-        const randomPosition = getRandomWindowPosition();
-        queue.value.push({
-          time,
-          expiresAt,
-          x: randomPosition.x,
-          y: randomPosition.y,
-          header,
-          content: entry.text,
-          role: isUserEntry ? 'user' : 'assistant',
-          messageAgent: resolved?.displayMeta?.agent,
-          messageModel: resolved?.displayMeta?.model,
-          messageProviderId: resolved?.usageProviderId,
-          messageModelId: resolved?.usageModelId,
-          messageUsage: resolved?.historyUsage,
-          messageVariant: resolved?.displayMeta?.variant,
-          messageTime: resolved?.resolvedTime,
-          scroll: overflowLines > 0,
-          scrollDistance,
-          scrollDuration,
-          scrollDelay: 0,
-          html: '',
-          attachments: entry.attachments,
-          isWrite: false,
-          isMessage: true,
-          isSubagentMessage,
-          messageId: entry.id,
-          messageKey,
-          follow: true,
-          sessionId,
-          zIndex: nextWindowZ(),
-        });
-      });
-      return;
-    }
-
-    // Build round groups
-    const roundRoots = new Map<string, (typeof history)[0]>();
-    const roundChildren = new Map<string, Array<(typeof history)[0]>>();
-    for (const entry of history) {
-      if (!entry.parentID) {
-        roundRoots.set(entry.id, entry);
-        if (!roundChildren.has(entry.id)) roundChildren.set(entry.id, []);
-      } else {
-        const children = roundChildren.get(entry.parentID) ?? [];
-        children.push(entry);
-        roundChildren.set(entry.parentID, children);
-      }
-    }
-
-    for (const root of history) {
-      if (root.parentID) continue;
-      if (!roundRoots.has(root.id)) continue;
-      const messageKey = messageStorageKey(root.id, sessionId);
-      if (queue.value.some((item) => item.messageKey === messageKey)) continue;
-      const rootResolved = historyMeta.get(root.id);
-      const header = '';
-      const time = Date.now();
-      const expiresAt = time + 1000 * 60 * 30;
-      const roundItems = [root, ...(roundChildren.get(root.id) ?? [])].sort((a, b) => {
-        const aTime = typeof a.messageTime === 'number' ? a.messageTime : undefined;
-        const bTime = typeof b.messageTime === 'number' ? b.messageTime : undefined;
-        if (aTime !== undefined && bTime !== undefined && aTime !== bTime) return aTime - bTime;
-        return a.sourceIndex - b.sourceIndex;
-      });
-      const roundMessages: RoundMessage[] = roundItems.map((item) => {
-        const resolved = historyMeta.get(item.id);
-        return {
-          messageId: item.id,
-          role: item.role === 'user' ? 'user' : 'assistant',
-          content: item.text,
-          attachments: item.attachments.length > 0 ? item.attachments : undefined,
-          agent: resolved?.displayMeta?.agent,
-          model: resolved?.displayMeta?.model,
-          providerId: resolved?.usageProviderId,
-          modelId: resolved?.usageModelId,
-          variant: resolved?.displayMeta?.variant,
-          time: resolved?.resolvedTime,
-          usage: resolved?.historyUsage,
-        };
-      });
-      const roundDiffs = root.role === 'user' ? parseSummaryDiffs(root.info) : [];
-      // Extract error from the last assistant message in the round (e.g. MessageAbortedError)
-      const lastAssistantItem = [...roundItems].reverse().find((item) => item.role !== 'user');
-      const roundError =
-        parseMessageError(lastAssistantItem?.info) ?? parseMessageError(root.info);
-
-      queue.value.push({
-        time,
-        expiresAt,
-        x: 0,
-        y: 0,
-        header,
-        content: root.text,
-        role: root.role === 'user' ? 'user' : 'assistant',
-        messageAgent: rootResolved?.displayMeta?.agent,
-        messageModel: rootResolved?.displayMeta?.model,
-        messageProviderId: rootResolved?.usageProviderId,
-        messageModelId: rootResolved?.usageModelId,
-        messageUsage: rootResolved?.historyUsage,
-        messageVariant: rootResolved?.displayMeta?.variant,
-        messageTime: rootResolved?.resolvedTime,
-        scroll: false,
-        scrollDistance: 0,
-        scrollDuration: 0,
-        scrollDelay: 0,
-        html: '',
-        attachments: root.attachments,
-        isWrite: false,
-        isMessage: true,
-        isSubagentMessage: false,
-        isRound: true,
-        roundId: root.id,
-        roundMessages,
-        roundDiffs,
-        messageError: roundError,
-        messageId: root.id,
-        messageKey,
-        sessionId,
-      });
-    }
 
     if (!isSubagentMessage) {
       notifyContentChange(false);
@@ -4997,12 +4307,10 @@ async function reloadSelectedSessionState() {
     }
   }
   disposeShellWindows({ preserve: true });
-  queue.value = [];
   fw.closeAll();
   msg.reset();
   resetFollow();
   reasoning.reset();
-  subagentSessionExpiry.clear();
   retryStatus.value = null;
   todosBySessionId.value = {};
   todoLoadingBySessionId.value = {};
@@ -5049,13 +4357,16 @@ watch(
   ([projectId, sessionId], previous) => {
     const [prevProjectId, prevSessionId] = previous ?? ['', ''];
     const contextKey = buildComposerContextKey(projectId, sessionId);
-    const prevContextKey = buildComposerContextKey(prevProjectId ?? '', prevSessionId ?? '');
-    if (contextKey === prevContextKey) return;
-    clearComposerInputState();
-    if (!contextKey) return;
-    const hadDraft = restoreComposerDraftForContext(contextKey);
-    if (!hadDraft) resolveDefaultAgentModel();
-  },
+  const prevContextKey = buildComposerContextKey(prevProjectId ?? '', prevSessionId ?? '');
+  if (contextKey === prevContextKey) return;
+  clearComposerInputState();
+  nextTick(() => {
+    inputPanelRef.value?.reset();
+  });
+  if (!contextKey) return;
+  const hadDraft = restoreComposerDraftForContext(contextKey);
+  if (!hadDraft) resolveDefaultAgentModel();
+},
   { immediate: true },
 );
 
@@ -5324,6 +4635,31 @@ async function renderReadHtmlFromApi(params: {
   if (!params.path) return renderText('READ path is missing in tool payload.');
 
   const requestPath = splitFileContentDirectoryAndPath(params.path, directory);
+  const directoryHint = params.fallbackText?.includes('<type>directory</type>') ?? false;
+
+  if (directoryHint) {
+    try {
+      const listData = await opencodeApi.listFiles(credentials.baseUrl.value, {
+        directory: requestPath.directory,
+        path: requestPath.path,
+      });
+      const entries = Array.isArray(listData)
+        ? listData
+            .map((item) => {
+              if (!item || typeof item !== 'object') return null;
+              const record = item as FileNode;
+              const name = record.name ?? record.path?.split('/').pop();
+              if (!name) return null;
+              return record.type === 'directory' ? `${name}/` : name;
+            })
+            .filter((entry): entry is string => Boolean(entry))
+        : [];
+      const code = entries.length > 0 ? entries.join('\n') : '(empty directory)';
+      return renderText(code, 'none');
+    } catch (error) {
+      return renderText(`Directory load failed: ${toErrorMessage(error)}`, 'none');
+    }
+  }
 
   try {
     const data = (await opencodeApi.readFileContent(credentials.baseUrl.value, {
@@ -6043,31 +5379,34 @@ function handleShowMessageDiff(payload: { messageKey: string; diffs: Array<Messa
   });
 }
 
-function handleShowMessageHistory(payload: { roundId: string; contents: string[] }) {
-  const { roundId, contents } = payload;
-  if (!contents || contents.length === 0) return;
-  const key = `message-history:${roundId}`;
-  // Close existing to re-create with updated messages
+// handleShowMessageHistory removed (legacy)
+
+function handleShowThreadHistory(payload: ThreadHistoryPayload) {
+  const { root, messages } = payload;
+  if (!root || messages.length === 0) return;
+  const validMessages = messages.filter((message) => msg.hasTextContent(message.id));
+  if (validMessages.length === 0) return;
+  const key = `thread-history:${root.id}`;
   if (fw.has(key)) fw.close(key);
-  const combinedMarkdown = contents.join('\n\n---\n\n');
   const pos = getFileViewerPosition();
   fw.open(key, {
-    component: FileViewerContent,
+    component: ThreadHistoryWindow,
     props: {
-      fileContent: combinedMarkdown,
-      lang: 'markdown',
-      gutterMode: 'none',
+      root,
+      messages: validMessages,
       theme: shikiTheme.value,
+      getMessageContent: msg.getTextContent,
     },
     closable: true,
     resizable: true,
     scroll: 'manual',
-    title: `Message History (${contents.length})`,
+    title: `Thread History (${validMessages.length})`,
     x: pos.x,
     y: pos.y,
     width: FILE_VIEWER_WINDOW_WIDTH,
     height: FILE_VIEWER_WINDOW_HEIGHT,
     expiry: Infinity,
+    allowCollapse: true,
   });
 }
 
@@ -6095,6 +5434,28 @@ function handleOpenImage(payload: { url: string; filename: string }) {
     height: 600,
     expiry: Infinity,
   });
+}
+
+async function handleEditMessage(payload: { sessionId: string; part: MessagePart }) {
+  const directory = activeDirectory.value.trim();
+  if (payload.part.type !== 'text') return;
+  const nextText = window.prompt('Edit message', payload.part.text);
+  if (nextText === null) return;
+  const trimmed = nextText.trimEnd();
+  if (!trimmed) return;
+  if (trimmed === payload.part.text) return;
+  try {
+    const part = { ...payload.part, text: trimmed };
+    await opencodeApi.patchMessagePart(credentials.baseUrl.value, {
+      sessionID: payload.sessionId,
+      messageID: part.messageID,
+      partID: part.id,
+      part,
+      directory: directory || undefined,
+    });
+  } catch (error) {
+    console.error('Failed to update message part', error);
+  }
 }
 
 async function openFileViewer(path: string) {
@@ -6259,18 +5620,6 @@ function detectDiffLike(content: string, path?: string) {
   );
 }
 
-function countWrappedLines(text: string, columns: number) {
-  if (columns <= 0) return text.split('\n').length;
-  const lines = text.split('\n');
-  return lines.reduce((total, line) => {
-    if (line.length === 0) return total + 1;
-    let width = 0;
-    for (const char of line) {
-      width += char.charCodeAt(0) > 0xff ? 2 : 1;
-    }
-    return total + Math.max(1, Math.ceil(width / columns));
-  }, 0);
-}
 
 function parseMessageTextFromParts(parts: unknown) {
   if (!Array.isArray(parts)) return undefined;
@@ -6358,22 +5707,7 @@ function hasToolParts(
   sessionId?: string,
 ): boolean {
   if (!parts || !partOrder || parts.size === 0) return false;
-  // If we can't inspect part types directly from the map (which only has content),
-  // we might need to rely on the side-effect based diff collection or previous knowledge.
-  // However, the `queue` tool entries are created separately.
-  // But `parseMessage` sees the `partType` in the event.
-  // We need a way to know if a message has tool parts.
-  // Let's check `queue` for tool entries associated with this message?
-  // Tool entries in queue have `callId`.
-  // Assistant messages in queue don't "contain" the tools, they are separate entries.
-  // But the prompt says "assistant side: classification signal for final_summary vs intermediate".
-  // "use part composition (e.g. presence/absence of tool and text)".
-  // If `parseMessage` receives a part with type `tool`, we know.
-  // But we need to know the *composition* of the whole message.
-  // A message might consist of multiple parts.
-  // If ANY part is a tool, it's intermediate?
-  // Let's track part types in a new map.
-  return false; // placeholder, will implement with new map
+  return false;
 }
 
 const messagePartTypesById = new Map<string, Set<string>>();
@@ -6675,23 +6009,6 @@ function parseSummaryDiffs(info: Record<string, unknown> | undefined): Array<Mes
   return result;
 }
 
-function applyMessageErrorToRound(
-  sessionId: string | undefined,
-  error: { name: string; message: string },
-) {
-  if (!sessionId) return;
-  // Find the last round entry for this session and set the error
-  for (let i = queue.value.length - 1; i >= 0; i--) {
-    const entry = queue.value[i];
-    if (entry?.isRound && entry.sessionId === sessionId) {
-      queue.value.splice(i, 1, {
-        ...entry,
-        messageError: error,
-      });
-      return;
-    }
-  }
-}
 
 function formatRetryTime(timestamp: number): string {
   const nextDate = new Date(timestamp);
@@ -6741,7 +6058,6 @@ function applySessionStatusEvent(
     setSessionStatus(sessionId, nextStatus, projectId);
     if (isAllowedSession) {
       if (isSelectedSession) retryStatus.value = null;
-      updateSubagentExpiry(sessionId, nextStatus);
       updateReasoningExpiry(sessionId, nextStatus);
     }
     if (nextStatus === 'busy') {
@@ -7044,48 +6360,6 @@ async function handleQuestionReply(payload: { requestId: string; answers: Questi
   refreshQuestionWindow(requestId);
   try {
     await sendQuestionReply(requestId, answers);
-    
-    // Get the question request to display the answer
-    const key = `question:${requestId}`;
-    const entry = fw.get(key);
-    const request = entry?.props?.request as QuestionRequest | undefined;
-    
-    if (request) {
-      // Build answer content
-      const answerLines: string[] = [];
-      request.questions.forEach((question, index) => {
-        const questionAnswers = answers[index] ?? [];
-        if (questionAnswers.length > 0) {
-          answerLines.push(`**${question.header}**`);
-          questionAnswers.forEach((answer) => {
-            answerLines.push(`- ${answer}`);
-          });
-        }
-      });
-      
-      const answerContent = answerLines.join('\n');
-      
-      // Add answer entry to output queue
-      queue.value.push({
-        time: Date.now(),
-        expiresAt: Infinity,
-        x: 0,
-        y: 0,
-        header: '',
-        content: answerContent,
-        scroll: false,
-        scrollDistance: 0,
-        scrollDuration: 0,
-        scrollDelay: 0,
-        html: '',
-        isWrite: false,
-        isMessage: false,
-        follow: true,
-        zIndex: nextWindowZ(),
-        isQuestionAnswer: true,
-      });
-    }
-    
     removeQuestionEntry(requestId);
   } catch (error) {
     setQuestionError(requestId, toErrorMessage(error));
@@ -7379,9 +6653,6 @@ onMounted(() => {
       if (selectedSessionId.value === sessionInfo.id) selectedSessionId.value = '';
     } else {
       upsertSessionGraph(sessionInfo);
-      if (sessionInfo.parentID) {
-        subagentSessionExpiry.set(sessionInfo.id, Date.now() + SUBAGENT_ACTIVE_TTL_MS);
-      }
     }
     markSessionGraphChanged();
 
