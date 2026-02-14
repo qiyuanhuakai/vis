@@ -6,13 +6,19 @@
       class="reasoning-entry"
       :class="{ 'reasoning-entry-separator': index > 0 }"
     >
-      <MessageViewer :code="entry.text" lang="markdown" :theme="theme" />
+      <MessageViewer
+        :code="entry.text"
+        lang="markdown"
+        :theme="theme"
+        @rendered="handleRendered"
+      />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import MessageViewer from '../MessageViewer.vue';
+import { useFloatingWindow } from '../../composables/useFloatingWindow';
 
 export type ReasoningEntry = {
   id: string;
@@ -28,6 +34,12 @@ withDefaults(
     theme: 'github-dark',
   },
 );
+
+const floatingWindow = useFloatingWindow();
+
+function handleRendered() {
+  floatingWindow.notifyContentChange();
+}
 </script>
 
 <style scoped>

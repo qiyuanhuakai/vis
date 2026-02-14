@@ -20,7 +20,7 @@ const windowEl = ref<HTMLElement>();
 const bodyEl = ref<HTMLElement>();
 
 const scrollMode = computed<ScrollMode>(() => props.entry.scroll || 'manual');
-const { showResumeButton, resumeFollow } = useAutoScroller(bodyEl, scrollMode);
+const { showResumeButton, resumeFollow, notifyContentChange } = useAutoScroller(bodyEl, scrollMode);
 
 function handleResumeFollowClick() {
   resumeFollow();
@@ -45,6 +45,9 @@ const api: FloatingWindowAPI = {
   html: computed(() => props.entry.resolvedHtml),
   title: computed(() => props.entry.title || ''),
   status: computed(() => props.entry.status || ''),
+  notifyContentChange: () => {
+    notifyContentChange();
+  },
   setContent: (text: string) => {
     props.manager.setContent(props.entry.key, text);
   },
