@@ -110,7 +110,10 @@ watch(isActive, (active) => {
   if (!active) clearHighlight();
   emit('update:open', active);
   if (active) {
-    nextTick(() => menu.value?.focus());
+    nextTick(() => {
+      menu.value?.focus();
+      highlightSelected();
+    });
   }
 });
 
@@ -139,6 +142,12 @@ function highlightItem(el: HTMLElement | undefined) {
   if (!el) return;
   el.setAttribute('aria-selected', 'true');
   el.scrollIntoView({ block: 'nearest' });
+}
+
+function highlightSelected() {
+  const items = getCandidateItems();
+  const activeItem = items.find((el) => el.classList.contains('is-active'));
+  highlightItem(activeItem);
 }
 
 function moveHighlight(direction: 'up' | 'down') {

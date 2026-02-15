@@ -158,7 +158,7 @@
         </div>
         <div class="input-field compact">
           <Dropdown
-            v-model="selectedThinkingChoice"
+            v-model="thinkingKeyValue"
             :label="selectedThinkingLabel"
             :placeholder="hasThinkingOptions ? 'Select variant' : 'Loading...'"
             :disabled="props.disabled || !hasThinkingOptions"
@@ -171,7 +171,7 @@
             <template #default>
               <div class="dropdown-list">
                 <div v-if="!hasThinkingOptions" class="dropdown-empty">Loading...</div>
-                <DropdownItem v-for="option in thinkingChoices" :key="option.key" :value="option">
+                <DropdownItem v-for="option in thinkingChoices" :key="option.key" :value="option.key">
                   <span class="dropdown-item-label">{{ option.label }}</span>
                 </DropdownItem>
               </div>
@@ -643,10 +643,15 @@ const thinkingChoices = computed<ThinkingChoice[]>(() =>
   })),
 );
 
-const selectedThinkingChoice = computed<ThinkingChoice | undefined>({
-  get: () => thinkingChoices.value.find((option) => option.value === props.selectedThinking),
-  set: (value) => {
-    thinkingValue.value = value?.value;
+const selectedThinkingChoice = computed<ThinkingChoice | undefined>(() =>
+  thinkingChoices.value.find((option) => option.value === props.selectedThinking),
+);
+
+const thinkingKeyValue = computed({
+  get: () => selectedThinkingChoice.value?.key,
+  set: (key: string) => {
+    const choice = thinkingChoices.value.find((c) => c.key === key);
+    emit('update:selected-thinking', choice?.value);
   },
 });
 
