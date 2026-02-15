@@ -251,7 +251,7 @@ Create a worktree and run startup.
 List worktrees.
 
 - Query: `directory?` (string)
-- Response `200`: [Worktree](#worktree)[]
+- Response `200`: `string[]` — List of sandbox directory paths
 
 ### DELETE /experimental/worktree
 
@@ -470,7 +470,7 @@ List messages in a session.
 - Query:
   - `directory?` (string)
   - `limit?` (number) — Max messages to return
-- Response `200`: ([UserMessage](#usermessage) | [AssistantMessage](#assistantmessage))[]
+- Response `200`: `{ info:` [UserMessage](#usermessage) `|` [AssistantMessage](#assistantmessage)`,` `parts:` [Part](#part)[] `}`[]
 - Response `400` / `404`
 
 ### POST /session/{sessionID}/message
@@ -508,7 +508,7 @@ Get a single message.
 
 - Path: `sessionID` (string, required), `messageID` (string, required)
 - Query: `directory?` (string)
-- Response `200`: [UserMessage](#usermessage) | [AssistantMessage](#assistantmessage)
+- Response `200`: `{ info:` [UserMessage](#usermessage) `|` [AssistantMessage](#assistantmessage)`,` `parts:` [Part](#part)[] `}`
 - Response `400` / `404`
 
 ### DELETE /session/{sessionID}/message/{messageID}/part/{partID}
@@ -568,9 +568,9 @@ Run a shell command in a session context.
 
 ## Permission
 
-### POST /session/{sessionID}/permissions/{permissionID}
+### POST /session/{sessionID}/permissions/{permissionID} *(deprecated)*
 
-Respond to a permission request (legacy endpoint).
+Respond to a permission request (legacy endpoint — use [POST /permission/{requestID}/reply](#post-permissionrequestidreply) instead).
 
 - Path: `sessionID` (string, required), `permissionID` (string, required)
 - Query: `directory?` (string)
@@ -965,7 +965,7 @@ Write a log entry.
 - Query: `directory?` (string)
 - Body:
   - `service` (string, **required**)
-  - `level` (string, **required**)
+  - `level` (`"debug"` | `"info"` | `"warn"` | `"error"`, **required**)
   - `message` (string, **required**)
   - `extra?`: object
 - Response `200`: `boolean`
