@@ -44,7 +44,7 @@
       @click.stop
       @keydown="onKeyDown"
     >
-      <slot :close="close" />
+      <slot :close="close" :search-results="searchResults" :search-loading="searchLoading" />
     </div>
   </div>
 </template>
@@ -70,6 +70,7 @@ export interface DropdownAPI {
   update: () => Promise<void>;
   moveHighlight: (direction: 'up' | 'down') => void;
   selectHighlighted: () => boolean;
+  updateSearch: (query: string) => void;
 }
 
 const props = defineProps<{
@@ -84,6 +85,8 @@ const props = defineProps<{
   autoClose?: boolean;
   disabled?: boolean;
   open?: boolean;
+  search?: (query: string, signal: AbortSignal) => Promise<unknown[]>;
+  searchDebounce?: number;
 }>();
 
 const emit = defineEmits<{
@@ -94,9 +97,15 @@ const emit = defineEmits<{
 
 const root = ref<HTMLElement | null>(null);
 const menu = ref<HTMLElement | null>(null);
-const isActive = ref(false);
+const isActive = ref(props.open ?? false);
 const candidateValues = ref<T[]>([]);
 const anchorName = `--ui-dropdown-anchor-${Math.random().toString(36).slice(2, 10)}`;
+
+const searchResults = ref<unknown[]>([]);
+const searchLoading = ref(false);
+let searchController: AbortController | null = null;
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let lastSearchQuery: string | undefined;
 
 const rootStyle = computed<StyleValue>(() => ({
   anchorName,
@@ -248,7 +257,7 @@ function onKeyDown(e: KeyboardEvent) {
   if (e.key === 'Tab') {
     e.preventDefault();
     e.stopPropagation();
-    moveHighlight('down');
+    moveHighlight(e.shiftKey ? 'up' : 'down');
     return;
   }
 }
@@ -301,13 +310,52 @@ watch(isActive, (active) => {
 
 onMounted(() => {
   window.addEventListener('pointerdown', handlePointerDown);
-  nextTick(() => updateCandidateValues());
+  nextTick(() => {
+    updateCandidateValues();
+    // When the dropdown is created with open=true, the isActive watchers
+    // never fire (no change from initial value). Start the observer here.
+    if (isActive.value) {
+      startObserver();
+    }
+  });
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('pointerdown', handlePointerDown);
   stopObserver();
+  if (searchTimer) clearTimeout(searchTimer);
+  if (searchController) searchController.abort();
 });
+
+function updateSearch(query: string) {
+  if (!props.search) return;
+  if (query === lastSearchQuery) return;
+  lastSearchQuery = query;
+  if (searchTimer) clearTimeout(searchTimer);
+  if (searchController) {
+    searchController.abort();
+    searchController = null;
+  }
+  const debounce = props.searchDebounce ?? 0;
+  const run = async () => {
+    const controller = new AbortController();
+    searchController = controller;
+    searchLoading.value = true;
+    try {
+      const results = await props.search!(query, controller.signal);
+      if (!controller.signal.aborted) searchResults.value = results;
+    } catch {
+      if (!controller.signal.aborted) searchResults.value = [];
+    } finally {
+      if (!controller.signal.aborted) searchLoading.value = false;
+    }
+  };
+  if (debounce > 0) {
+    searchTimer = setTimeout(run, debounce);
+  } else {
+    void run();
+  }
+}
 
 const api = reactive({
   select(item: T) {
@@ -323,11 +371,12 @@ const api = reactive({
   },
   moveHighlight,
   selectHighlighted,
+  updateSearch,
 });
 
 provide('x-selectable', api);
 
-defineExpose({ moveHighlight, selectHighlighted });
+defineExpose({ moveHighlight, selectHighlighted, updateSearch, clearHighlight });
 </script>
 
 <style scoped>

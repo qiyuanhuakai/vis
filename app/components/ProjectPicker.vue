@@ -1,60 +1,68 @@
 <template>
-  <div v-if="open" class="modal-backdrop">
-    <div class="modal" role="dialog" aria-modal="true" tabindex="0" @keydown="handleKeydown">
-      <header class="modal-header">
-        <div class="modal-title">Select folder</div>
-        <button type="button" class="control-button" @click="$emit('close')"><Icon icon="lucide:x" :width="12" :height="12" /> Close</button>
-      </header>
-      <div class="modal-body">
-        <div class="field-row">
-          <input
-            v-model="searchQuery"
-            ref="searchInputRef"
-            class="control-input"
-            type="text"
-            placeholder="Search directories"
-          />
-        </div>
-        <div v-if="error" class="error-text">{{ error }}</div>
-        <div class="list-block">
-          <div class="list-title">Results</div>
-          <div class="list" :class="{ loading: searching }">
-            <button
-              v-for="(result, index) in searchResults"
-              :key="result.path"
-              type="button"
-              class="list-item"
-              :class="{ 'is-active': index === activeSearchIndex }"
-              @click="activateSearchResult(index)"
-            >
-              <span v-html="result.labelHtml"></span>
+  <div v-if="open" class="modal-backdrop" @click.self="handleClose">
+    <div class="modal" role="dialog" aria-modal="true">
+      <Dropdown
+        ref="dropdownRef"
+        :open="dropdownOpen"
+        :auto-close="false"
+        :popup-style="popupStyle"
+        :popup-class="['picker-popup', { 'is-loading': isLoading }]"
+        class="picker-dropdown"
+        @select="handleItemSelect"
+        @update:open="handleDropdownOpenChange"
+      >
+        <template #trigger>
+          <header class="modal-header">
+            <span class="modal-title">Open project</span>
+            <button type="button" class="control-button" @click="handleClose">
+              <Icon icon="lucide:x" :width="12" :height="12" /> Close
             </button>
-            <div v-if="!searching && searchResults.length === 0" class="empty-text">
-              No results.
-            </div>
+          </header>
+          <div class="path-row">
+            <input
+              ref="inputRef"
+              :value="rawInput"
+              class="path-input"
+              type="text"
+              placeholder="Directory path..."
+              @input="handleInput"
+              @keydown="handleInputKeydown"
+            />
+            <button type="button" class="open-button" :disabled="!currentDir" @click="handleOpen">
+              Open
+            </button>
           </div>
+          <div v-if="error" class="error-text">{{ error }}</div>
+        </template>
+
+        <DropdownItem v-if="!isAtRoot" value="..">../</DropdownItem>
+        <DropdownItem
+          v-for="item in suggestions"
+          :key="item.name"
+          :value="item.name"
+        >
+          {{ item.name }}/
+        </DropdownItem>
+        <div v-if="!isLoading && suggestions.length === 0 && currentDir" class="picker-empty">
+          {{ parsed.filter ? 'No matches' : 'No subdirectories' }}
         </div>
-      </div>
+      </Dropdown>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, customRef, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
+import Dropdown from './Dropdown.vue';
+import DropdownItem from './Dropdown/Item.vue';
 
-type BasePath = { id: string; label: string; path: string };
 type FileNode = {
   name: string;
   path: string;
   absolute: string;
   type: 'file' | 'directory';
   ignored: boolean;
-};
-type SearchResult = {
-  path: string;
-  label: string;
-  labelHtml: string;
 };
 
 const props = defineProps<{
@@ -69,360 +77,343 @@ const emit = defineEmits<{
   (event: 'close'): void;
 }>();
 
-const basePaths = ref<BasePath[]>([]);
-const baseId = ref('');
-const searching = ref(false);
-const error = ref('');
-const searchInputRef = ref<HTMLInputElement | null>(null);
-const activeSearchIndex = ref(-1);
+const dropdownRef = ref<InstanceType<typeof Dropdown> | null>(null);
+const inputRef = ref<HTMLInputElement | null>(null);
+const rawInput = ref('');
 const homePath = ref('');
-let searchTimeout: ReturnType<typeof setTimeout> | null = null;
-let searchRequestId = 0;
-let searchController: AbortController | null = null;
-const searchQuery = customRef<string>((track, trigger) => {
-  let value = '';
+const isLoading = ref(false);
+const error = ref('');
+const allEntries = ref<FileNode[]>([]);
+const dropdownOpen = ref(false);
+let fetchController: AbortController | null = null;
+let fetchRequestId = 0;
+
+const popupStyle = { maxHeight: '40vh' };
+
+// ---------------------------------------------------------------------------
+// Derived state
+// ---------------------------------------------------------------------------
+
+/** Split the raw input into an absolute directory and a trailing filter string. */
+const parsed = computed(() => {
+  const expanded = expandTilde(rawInput.value);
+  const lastSlash = expanded.lastIndexOf('/');
+  if (lastSlash < 0) return { dir: '', filter: expanded };
   return {
-    get() {
-      track();
-      return value;
-    },
-    set(nextValue) {
-      if (nextValue === value) return;
-      value = nextValue;
-      trigger();
-      queueSearch(nextValue);
-    },
+    dir: expanded.slice(0, lastSlash + 1),
+    filter: expanded.slice(lastSlash + 1),
   };
 });
-const searchResults = ref<SearchResult[]>([]);
 
-const activeBasePath = computed(() => basePaths.value.find((base) => base.id === baseId.value));
+/** Absolute directory path (the part before the trailing filter). */
+const currentDir = computed(() => parsed.value.dir);
+
+/** Directory entries filtered by the trailing text after the last `/`. */
+const suggestions = computed(() => {
+  const { filter } = parsed.value;
+  const dirs = allEntries.value.filter((n) => n.type === 'directory' && !n.ignored);
+  if (!filter) return dirs;
+  const lower = filter.toLowerCase();
+  return dirs.filter((n) => n.name.toLowerCase().startsWith(lower));
+});
+
+const isAtRoot = computed(() => {
+  const dir = currentDir.value;
+  return !dir || dir === '/';
+});
+
+/** Include `../` in Tab completion candidates only when filter starts with `.` (bash convention). */
+const completeParent = computed(() => {
+  if (isAtRoot.value) return false;
+  const { filter } = parsed.value;
+  if (!filter) return false;
+  return '..'.startsWith(filter.toLowerCase());
+});
+
+// ---------------------------------------------------------------------------
+// Watchers
+// ---------------------------------------------------------------------------
+
+watch(currentDir, (dir) => {
+  if (!dir) {
+    allEntries.value = [];
+    return;
+  }
+  void fetchDirectory(dir);
+});
 
 watch(
   () => props.open,
   (open) => {
     if (!open) return;
+    dropdownOpen.value = true;
     void initPicker();
   },
 );
 
-watch(baseId, () => {
-  if (!props.open) return;
-  searchQuery.value = '';
-  searchResults.value = [];
-  activeSearchIndex.value = -1;
-  void loadDefaultResults();
-});
+// ---------------------------------------------------------------------------
+// Initialisation
+// ---------------------------------------------------------------------------
 
 async function initPicker() {
   error.value = '';
-  searchResults.value = [];
-  searchQuery.value = '';
-  await loadBasePaths();
-  if (!baseId.value && props.initialDirectory) applyInitialDirectory(props.initialDirectory);
+  allEntries.value = [];
+  rawInput.value = '';
+
+  await loadHomePath();
+
+  const initial = homePath.value || '/';
+  rawInput.value = collapseTilde(initial);
+
   await nextTick();
-  searchInputRef.value?.focus();
-  void loadDefaultResults();
+  inputRef.value?.focus();
+  const len = rawInput.value.length;
+  inputRef.value?.setSelectionRange(len, len);
 }
 
-async function loadBasePaths() {
+async function loadHomePath() {
   try {
     const headers: Record<string, string> = {};
     if (props.authorization) headers['Authorization'] = props.authorization;
     const response = await fetch(`${props.baseUrl}/path`, { headers });
-    if (!response.ok) throw new Error(`Path request failed (${response.status})`);
+    if (!response.ok) return;
     const data = (await response.json()) as Record<string, string>;
-    const candidates: BasePath[] = [];
-    const order: Array<[string, string]> = [
-      ['worktree', 'worktree'],
-      ['directory', 'directory'],
-      ['home', 'home'],
-      ['config', 'config'],
-      ['state', 'state'],
-    ];
-    order.forEach(([key, label]) => {
-      const value = data?.[key];
-      if (typeof value === 'string' && value.length > 0) {
-        candidates.push({ id: key, label, path: value });
-      }
-    });
-    basePaths.value = candidates;
-    if (!baseId.value && candidates.length > 0) {
-      const home = candidates.find((base) => base.id === 'home');
-      baseId.value = home?.id ?? candidates[0]!.id;
-    }
-    homePath.value = candidates.find((base) => base.id === 'home')?.path ?? '';
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
+    homePath.value = data.home ? ensureTrailingSlash(data.home) : '';
+  } catch {
+    // ignore – homePath stays empty, tilde expansion is a no-op
   }
 }
 
-function applyInitialDirectory(initialDirectory: string) {
-  if (!initialDirectory) return;
-  const match = basePaths.value.find(
-    (base) => initialDirectory === base.path || initialDirectory.startsWith(`${base.path}/`),
-  );
-  if (match) {
-    baseId.value = match.id;
-  } else if (basePaths.value.length === 0) {
-    basePaths.value = [{ id: 'current', label: 'current', path: initialDirectory }];
-    baseId.value = 'current';
-  }
-}
+// ---------------------------------------------------------------------------
+// Directory fetching
+// ---------------------------------------------------------------------------
 
-async function loadDefaultResults() {
-  const base = getSelectedBasePath();
-  if (!base) return;
-  if (searchController) {
-    searchController.abort();
-    searchController = null;
+async function fetchDirectory(dir: string) {
+  if (fetchController) {
+    fetchController.abort();
+    fetchController = null;
   }
+
+  const requestId = ++fetchRequestId;
   const controller = new AbortController();
-  searchController = controller;
-  const requestId = ++searchRequestId;
-  searching.value = true;
+  fetchController = controller;
+  isLoading.value = true;
   error.value = '';
+
   try {
-    const params = new URLSearchParams({
-      directory: base,
-      query: '',
-      type: 'directory',
-      limit: '50',
-    });
     const headers: Record<string, string> = {};
     if (props.authorization) headers['Authorization'] = props.authorization;
-    const response = await fetch(`${props.baseUrl}/find/file?${params.toString()}`, {
+    const cleanDir = dir.replace(/\/+$/, '') || '/';
+    const params = new URLSearchParams({ directory: cleanDir, path: '' });
+    const response = await fetch(`${props.baseUrl}/file?${params.toString()}`, {
       signal: controller.signal,
       headers,
     });
-    if (!response.ok) throw new Error(`Search request failed (${response.status})`);
-    const data = (await response.json()) as string[];
-    const list = Array.isArray(data) ? data : [];
-    if (requestId !== searchRequestId) return;
-    const results = list.map((item) => {
-      const relative = item.replace(/^\/+/, '').replace(/\/+$/, '');
-      const absolute = `${base.replace(/\/+$/, '')}/${relative}`;
-      return buildSearchResult(absolute, `~/${relative}`);
-    });
-    searchResults.value = sortResults(results);
-    activeSearchIndex.value = searchResults.value.length > 0 ? 0 : -1;
-  } catch (err) {
-    if (requestId !== searchRequestId) return;
-    error.value = err instanceof Error ? err.message : String(err);
-    searchResults.value = [];
-    activeSearchIndex.value = -1;
-  } finally {
-    if (requestId === searchRequestId) searching.value = false;
-  }
-}
-
-async function runSearch(query: string) {
-  const base = activeBasePath.value?.path;
-  const trimmed = query.trim();
-  if (!trimmed) {
-    searchResults.value = [];
-    activeSearchIndex.value = -1;
-    return;
-  }
-  const requestId = ++searchRequestId;
-  const controller = new AbortController();
-  searchController = controller;
-  searching.value = true;
-  error.value = '';
-  try {
-    if (trimmed.startsWith('/')) {
-      const normalized = normalizeAbsoluteQuery(trimmed);
-      const { basePath, filterText } = splitAbsoluteQuery(normalized);
-      const params = new URLSearchParams({
-        directory: basePath,
-        path: '',
-      });
-      const headers: Record<string, string> = {};
-      if (props.authorization) headers['Authorization'] = props.authorization;
-      const response = await fetch(`${props.baseUrl}/file?${params.toString()}`, {
-        signal: controller.signal,
-        headers,
-      });
-      if (!response.ok) throw new Error(`File request failed (${response.status})`);
-      const data = (await response.json()) as FileNode[];
-      const list = Array.isArray(data) ? data : [];
-      if (requestId !== searchRequestId) return;
-      const results = list
-        .filter((node) => node.type === 'directory' && !node.ignored)
-        .filter((node) => {
-          if (!filterText) return true;
-          const candidate = node.path || node.name || '';
-          return candidate.startsWith(filterText);
-        })
-        .map((node) => {
-          const absolute =
-            node.absolute || node.path || `${basePath.replace(/\/+$/, '')}/${node.name}`;
-          return buildSearchResult(absolute, absolute, filterText);
-        });
-      searchResults.value = sortResults(results);
-      activeSearchIndex.value = searchResults.value.length > 0 ? 0 : -1;
-      return;
-    }
-
-    const searchBase = homePath.value || base;
-    if (!searchBase) throw new Error('Search base not available');
-    const params = new URLSearchParams({
-      directory: searchBase,
-      query: trimmed,
-      type: 'directory',
-      limit: '50',
-    });
-    const headers2: Record<string, string> = {};
-    if (props.authorization) headers2['Authorization'] = props.authorization;
-    const response = await fetch(`${props.baseUrl}/find/file?${params.toString()}`, {
-      signal: controller.signal,
-      headers: headers2,
-    });
-    if (!response.ok) throw new Error(`Search request failed (${response.status})`);
-    const data = (await response.json()) as string[];
-    const results = Array.isArray(data) ? data : [];
-    if (requestId !== searchRequestId) return;
-    searchResults.value = sortResults(
-      results.map((item) => {
-        const relative = item.replace(/^\/+/, '').replace(/\/+$/, '');
-        const absolute = `${searchBase.replace(/\/+$/, '')}/${relative}`;
-        const label = `~/${relative}`;
-        return buildSearchResult(absolute, label, trimmed);
-      }),
-    );
-    activeSearchIndex.value = searchResults.value.length > 0 ? 0 : -1;
+    if (!response.ok) throw new Error(`Failed to list directory (${response.status})`);
+    const data = (await response.json()) as FileNode[];
+    if (requestId !== fetchRequestId) return;
+    allEntries.value = Array.isArray(data) ? data : [];
   } catch (err) {
     if ((err as Error).name === 'AbortError') return;
-    if (requestId !== searchRequestId) return;
+    if (requestId !== fetchRequestId) return;
     error.value = err instanceof Error ? err.message : String(err);
-    searchResults.value = [];
-    activeSearchIndex.value = -1;
+    allEntries.value = [];
   } finally {
-    if (requestId === searchRequestId) searching.value = false;
+    if (requestId === fetchRequestId) isLoading.value = false;
   }
 }
 
-function queueSearch(nextValue: string) {
-  if (searchTimeout) clearTimeout(searchTimeout);
-  if (searchController) {
-    searchController.abort();
-    searchController = null;
+// ---------------------------------------------------------------------------
+// Input handling
+// ---------------------------------------------------------------------------
+
+function handleInput(e: Event) {
+  let value = (e.target as HTMLInputElement).value;
+  let didNormalize = false;
+
+  // Resolve ../ and ./ immediately so the path stays clean.
+  if (value.includes('../') || value.includes('/./')) {
+    const expanded = expandTilde(value);
+    value = collapseTilde(normalizePath(expanded));
+    didNormalize = true;
   }
-  const trimmed = nextValue.trim();
-  if (!trimmed) {
-    void loadDefaultResults();
+
+  rawInput.value = value;
+
+  if (didNormalize) {
+    nextTick(() => {
+      inputRef.value?.setSelectionRange(value.length, value.length);
+    });
+  }
+}
+
+function handleInputKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    handleClose();
     return;
   }
-  searchTimeout = setTimeout(() => {
-    runSearch(nextValue);
-  }, 250);
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    dropdownRef.value?.moveHighlight('down');
+    return;
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    dropdownRef.value?.moveHighlight('up');
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    dropdownRef.value?.selectHighlighted();
+    return;
+  }
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    handleTab(e.shiftKey);
+    return;
+  }
 }
 
-function selectSearchResult(resultPath: string) {
-  if (!resultPath) return;
-  emit('select', resultPath);
+// ---------------------------------------------------------------------------
+// Tab completion (shell-style)
+// ---------------------------------------------------------------------------
+
+function handleTab(reverse = false) {
+  // Collect Tab completion candidates (../ only when filter starts with ".")
+  const names: string[] = [];
+  if (completeParent.value) names.push('..');
+  for (const s of suggestions.value) names.push(s.name);
+
+  if (names.length === 0) return;
+
+  // Single match — select immediately
+  if (names.length === 1) {
+    handleItemSelect(names[0]);
+    return;
+  }
+
+  // Multiple matches — try to extend input to longest common prefix
+  const { filter } = parsed.value;
+  const lcp = longestCommonPrefix(names);
+
+  if (lcp.length > filter.length) {
+    // Extend input to LCP (partial completion)
+    const { dir } = parsed.value;
+    rawInput.value = collapseTilde(dir + lcp);
+    nextTick(() => {
+      inputRef.value?.focus();
+      const len = rawInput.value.length;
+      inputRef.value?.setSelectionRange(len, len);
+    });
+  } else {
+    // LCP already matches filter — cycle through highlighted items
+    dropdownRef.value?.moveHighlight(reverse ? 'up' : 'down');
+  }
+}
+
+function longestCommonPrefix(strings: string[]): string {
+  if (strings.length === 0) return '';
+  const first = strings[0];
+  let len = first.length;
+  for (let i = 1; i < strings.length; i++) {
+    len = Math.min(len, strings[i].length);
+    for (let j = 0; j < len; j++) {
+      if (first[j].toLowerCase() !== strings[i][j].toLowerCase()) {
+        len = j;
+        break;
+      }
+    }
+  }
+  return first.slice(0, len);
+}
+
+// ---------------------------------------------------------------------------
+// Selection / navigation
+// ---------------------------------------------------------------------------
+
+function handleItemSelect(value: string) {
+  if (value === '..') {
+    goUp();
+  } else {
+    appendToPath(value);
+  }
+  nextTick(() => {
+    inputRef.value?.focus();
+    const len = rawInput.value.length;
+    inputRef.value?.setSelectionRange(len, len);
+  });
+}
+
+function appendToPath(name: string) {
+  const { dir } = parsed.value;
+  rawInput.value = collapseTilde(dir + name + '/');
+}
+
+function goUp() {
+  const dir = currentDir.value;
+  if (!dir || dir === '/') return;
+  // Strip the last path component: /home/user/projects/ → /home/user/
+  const parent = dir.replace(/[^/]+\/$/, '') || '/';
+  rawInput.value = collapseTilde(parent);
+}
+
+function handleOpen() {
+  const dir = currentDir.value;
+  if (!dir) return;
+  const clean = dir.replace(/\/+$/, '');
+  if (clean) {
+    emit('select', clean);
+    emit('close');
+  }
+}
+
+function handleClose() {
   emit('close');
 }
 
-function activateSearchResult(index: number) {
-  if (index < 0 || index >= searchResults.value.length) return;
-  activeSearchIndex.value = index;
-  selectSearchResult(searchResults.value[index]!.path);
-}
-
-function handleKeydown(event: KeyboardEvent) {
-  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return;
-  const items = searchResults.value;
-  if (items.length === 0) return;
-  event.preventDefault();
-  if (event.key === 'ArrowDown') {
-    if (activeSearchIndex.value < 0) activeSearchIndex.value = 0;
-    else activeSearchIndex.value = (activeSearchIndex.value + 1) % items.length;
-    return;
+function handleDropdownOpenChange(value: boolean) {
+  dropdownOpen.value = value;
+  if (!value && props.open) {
+    // Dropdown tried to close (Escape on menu, outside click) — close the modal
+    emit('close');
   }
-  if (event.key === 'ArrowUp') {
-    if (activeSearchIndex.value < 0) activeSearchIndex.value = items.length - 1;
-    else activeSearchIndex.value = (activeSearchIndex.value - 1 + items.length) % items.length;
-    return;
+}
+
+// ---------------------------------------------------------------------------
+// Path utilities
+// ---------------------------------------------------------------------------
+
+function expandTilde(p: string): string {
+  if (!homePath.value) return p;
+  if (p === '~') return homePath.value;
+  if (p.startsWith('~/')) return homePath.value + p.slice(2);
+  return p;
+}
+
+function collapseTilde(p: string): string {
+  if (!homePath.value) return p;
+  if (p === homePath.value || p === homePath.value.replace(/\/$/, '')) return '~/';
+  if (p.startsWith(homePath.value)) return '~/' + p.slice(homePath.value.length);
+  return p;
+}
+
+function normalizePath(p: string): string {
+  if (!p) return p;
+  const parts = p.split('/');
+  const result: string[] = [];
+  for (const part of parts) {
+    if (part === '..') {
+      if (result.length > 0 && result[result.length - 1] !== '') result.pop();
+    } else if (part !== '.') {
+      result.push(part);
+    }
   }
-  const selectedIndex = activeSearchIndex.value < 0 ? 0 : activeSearchIndex.value;
-  activateSearchResult(selectedIndex);
+  return result.join('/');
 }
 
-function toRelativeFromBase(resultPath: string, base: string) {
-  if (resultPath.startsWith(base)) {
-    return resultPath.slice(base.length).replace(/^\/+/, '').replace(/\/+$/, '');
-  }
-  if (resultPath.startsWith('/')) return resultPath.replace(/^\/+/, '').replace(/\/+$/, '');
-  return resultPath.replace(/^\/+/, '').replace(/\/+$/, '');
-}
-
-function normalizeAbsoluteQuery(value: string) {
-  return value.replace(/\/+/g, '/');
-}
-
-function splitAbsoluteQuery(value: string) {
-  if (value === '/') return { basePath: '/', filterText: '' };
-  const trailingSlash = value.endsWith('/');
-  const cleaned = value.replace(/\/+$/, '');
-  if (trailingSlash) {
-    return { basePath: cleaned || '/', filterText: '' };
-  }
-  const lastSlash = cleaned.lastIndexOf('/');
-  if (lastSlash <= 0) {
-    return {
-      basePath: '/',
-      filterText: cleaned.replace(/^\/+/, ''),
-    };
-  }
-  const basePath = cleaned.slice(0, lastSlash) || '/';
-  const filterText = cleaned.slice(lastSlash + 1);
-  return { basePath, filterText };
-}
-
-function sortResults(items: SearchResult[]) {
-  return [...items].sort((a, b) =>
-    a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }),
-  );
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function highlightMatch(label: string, match?: string) {
-  if (!match) return escapeHtml(label);
-  const escapedMatch = match.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (!escapedMatch) return escapeHtml(label);
-  const regex = new RegExp(escapedMatch, 'gi');
-  let result = '';
-  let lastIndex = 0;
-  let hasMatch = false;
-  for (const hit of label.matchAll(regex)) {
-    if (hit.index === undefined) continue;
-    hasMatch = true;
-    const start = hit.index;
-    const end = start + hit[0].length;
-    result += escapeHtml(label.slice(lastIndex, start));
-    result += `<strong class="match">${escapeHtml(hit[0])}</strong>`;
-    lastIndex = end;
-  }
-  if (!hasMatch) return escapeHtml(label);
-  result += escapeHtml(label.slice(lastIndex));
-  return result;
-}
-
-function buildSearchResult(path: string, label: string, match?: string): SearchResult {
-  return {
-    path,
-    label,
-    labelHtml: highlightMatch(label, match),
-  };
+function ensureTrailingSlash(p: string): string {
+  return p.endsWith('/') ? p : p + '/';
 }
 </script>
 
@@ -438,11 +429,10 @@ function buildSearchResult(path: string, label: string, match?: string): SearchR
 }
 
 .modal {
-  width: min(960px, 95vw);
+  width: min(640px, 95vw);
   max-height: 90vh;
   display: flex;
   flex-direction: column;
-  gap: 12px;
   padding: 12px;
   background: rgba(15, 23, 42, 0.98);
   border: 1px solid #334155;
@@ -450,6 +440,13 @@ function buildSearchResult(path: string, label: string, match?: string): SearchR
   box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
   color: #e2e8f0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+.picker-dropdown {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
 }
 
 .modal-header {
@@ -464,86 +461,15 @@ function buildSearchResult(path: string, label: string, match?: string): SearchR
   font-weight: 600;
 }
 
-.modal-body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 0;
-}
-
-.field-row {
+.path-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.list-block {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-height: 0;
-}
 
-.list-title {
-  font-size: 12px;
-  color: #94a3b8;
-}
-
-.list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 6px;
-  border: 1px solid #1e293b;
-  border-radius: 10px;
-  min-height: 160px;
-  max-height: 40vh;
-  overflow: auto;
-  background: rgba(2, 6, 23, 0.45);
-}
-
-.list.loading {
-  opacity: 0.6;
-}
-
-.list-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid #1e293b;
-  border-radius: 8px;
-  background: rgba(15, 23, 42, 0.75);
-  color: inherit;
-  cursor: pointer;
-  text-align: left;
-}
-
-.list-item:hover {
-  border-color: #334155;
-}
-
-.list-item.is-active {
-  border-color: #60a5fa;
-  background: rgba(37, 99, 235, 0.2);
-}
-
-.list-item .match {
-  font-weight: 700;
-}
-
-.empty-text {
-  font-size: 12px;
-  color: #94a3b8;
-}
-
-.error-text {
-  font-size: 12px;
-  color: #fecaca;
-}
-
-.control-input {
-  width: 100%;
+.path-input {
+  flex: 1;
+  min-width: 0;
   background: #0b1320;
   color: #e2e8f0;
   border: 1px solid #334155;
@@ -553,6 +479,50 @@ function buildSearchResult(path: string, label: string, match?: string): SearchR
   font-family: inherit;
   outline: none;
   box-sizing: border-box;
+}
+
+.path-input:focus {
+  border-color: #60a5fa;
+}
+
+.open-button {
+  flex-shrink: 0;
+  background: #1e40af;
+  color: #e2e8f0;
+  border: 1px solid #2563eb;
+  border-radius: 8px;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.open-button:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.open-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+:deep(.picker-popup) {
+  min-height: 80px;
+}
+
+:deep(.picker-popup.is-loading) {
+  opacity: 0.6;
+}
+
+.picker-empty {
+  font-size: 12px;
+  color: #64748b;
+  padding: 4px 8px;
+}
+
+.error-text {
+  font-size: 12px;
+  color: #fecaca;
 }
 
 .control-button {

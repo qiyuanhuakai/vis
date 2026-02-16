@@ -685,24 +685,62 @@ Search text with a regex pattern.
 
 ### GET /find/file
 
-Search files by name.
+Search files and directories by name using fuzzy matching ([fuzzysort](https://github.com/farzher/fuzzysort) 3.x).
 
 - Query:
   - `directory?` (string)
-  - `query` (string, **required**)
-  - `type?`: string
-  - `dirs?`: string — Comma-separated directory list
-  - `limit?`: integer
-- Response `200`: `array`
+  - `query` (string, **required**) — Search term. Can be empty.
+  - `type?`: `"file"` | `"directory"` — Filter results by type. When omitted, returns both (unless `dirs=false`).
+  - `dirs?`: `"true"` | `"false"` — Include directories in results. Default `"true"`. Ignored when `type` is set.
+  - `limit?`: integer (1–200) — Max results. Default: 10.
+- Response `200`: `string[]` — Relative paths within the instance directory. Directory paths end with `/`.
+
+#### Behavior
+
+The search operates on a **cached index** of the project's file tree, not the live filesystem. The index is built in the background on startup and refreshed lazily.
+
+**When `query` is empty:**
+
+Returns entries sorted alphabetically. For `type=directory`, hidden directories (names starting with `.`) are sorted to the end.
+
+**When `query` is non-empty:**
+
+Uses fuzzysort for fuzzy matching against the cached paths. Results are sorted by match score (best first). For `type=directory`, the search internally over-fetches (`limit × 20`), sorts hidden directories to the end, then slices to `limit`. If `query` starts with `.` or contains `/.`, hidden entries are **not** deprioritized.
+
+#### Index building
+
+How the index is built depends on the scoped instance:
+
+- **Home instance** (`directory` = home path, project = `"global"`): Only directories are indexed. Scans **2 levels deep** from home. Skips hidden directories, platform-specific directories (`Library` on macOS, `AppData` on Windows), and common build artifacts (`node_modules`, `dist`, `build`, `target`, `vendor`) at the second level. **No files are indexed.**
+- **Normal project instances**: Uses `rg --files` (ripgrep) to enumerate all non-ignored files, then extracts directory paths from the file paths. Both files and directories are indexed.
 
 ### GET /find/symbol
 
-Search workspace symbols.
+Search workspace symbols (functions, classes, variables, etc.) using LSP.
+
+> **Note**: This endpoint is currently **stubbed** — it always returns `[]`. The implementation is commented out on the server side. When enabled, it would use the LSP `workspace/symbol` request.
 
 - Query:
   - `directory?` (string)
-  - `query` (string, **required**)
-- Response `200`: `array`
+  - `query` (string, **required**) — Symbol name to search for
+- Response `200`: [Symbol](#symbol)[]
+
+#### Intended Behavior (when enabled)
+
+Sends a `workspace/symbol` LSP request to **all** connected LSP clients in the project. Results are filtered to include only the following symbol kinds:
+
+| Kind | Value |
+|------|-------|
+| Class | 5 |
+| Function | 12 |
+| Method | 6 |
+| Interface | 11 |
+| Variable | 13 |
+| Constant | 14 |
+| Struct | 23 |
+| Enum | 10 |
+
+Results are limited to **10 per LSP client**, then flattened into a single array across all clients.
 
 ---
 
@@ -1433,6 +1471,19 @@ Discriminated union on `status`.
 - `{ status: "failed", error: string }`
 - `{ status: "needs_auth" }`
 - `{ status: "needs_client_registration", error: string }`
+
+### Symbol
+
+Workspace symbol returned by LSP `workspace/symbol`.
+
+- `name`: string — Symbol name
+- `kind`: number — [LSP SymbolKind](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#symbolKind) (e.g. 5 = Class, 12 = Function)
+- `location`: `{ uri: string, range:` [Range](#range) `}`
+
+### Range
+
+- `start`: `{ line: number, character: number }`
+- `end`: `{ line: number, character: number }`
 
 ### LSPStatus
 

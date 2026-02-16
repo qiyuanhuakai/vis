@@ -33,7 +33,9 @@ const inputRef = ref<HTMLInputElement | null>(null);
 const api = inject<DropdownAPI>('x-selectable');
 
 function onInput(e: Event) {
-  emit('update:modelValue', (e.target as HTMLInputElement).value);
+  const value = (e.target as HTMLInputElement).value;
+  emit('update:modelValue', value);
+  api?.updateSearch(value);
 }
 
 function onKeydown(e: KeyboardEvent) {
