@@ -247,7 +247,7 @@ const api = reactive({
 
 provide('x-selectable', api);
 
-defineExpose({ moveHighlight });
+defineExpose({ moveHighlight, selectHighlighted });
 </script>
 
 <style scoped>

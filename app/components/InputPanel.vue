@@ -120,6 +120,7 @@
         <div class="input-field compact">
           <div ref="modelDropdownRef" class="input-dropdown-root">
             <Dropdown
+              ref="modelDropdownComponent"
               v-model="modelValue"
               :label="selectedModelDisplayName"
               :placeholder="hasModelOptions ? 'Select model' : 'Loading models...'"
@@ -140,19 +141,35 @@
                 </div>
               </template>
               <template #default>
-                <div class="dropdown-list">
-                  <div v-if="!hasModelOptions" class="dropdown-empty">Loading models...</div>
-                  <template v-for="group in groupedModelOptions" :key="group.providerID">
-                    <div class="input-dropdown-group-label">{{ group.label }}</div>
-                    <DropdownItem v-for="model in group.models" :key="model.id" :value="model.id">
-                      <div class="model-dropdown-item">
-                        <span class="model-dropdown-name">{{ model.displayName }}</span>
-                        <span class="model-dropdown-path"
-                          >{{ model.providerID }}/{{ model.modelID }}</span
-                        >
-                      </div>
-                    </DropdownItem>
-                  </template>
+                <div class="model-picker">
+                  <div class="model-search" @click.stop>
+                    <input
+                      v-auto-focus
+                      v-model="modelSearchQuery"
+                      type="text"
+                      placeholder="Search..."
+                      class="model-search-input"
+                      @click.stop
+                      @keydown="handleModelSearchKeydown"
+                    />
+                  </div>
+                  <div class="model-picker-list">
+                    <div class="dropdown-list">
+                      <div v-if="!hasModelOptions" class="dropdown-empty">Loading models...</div>
+                      <div v-else-if="filteredGroupedModelOptions.length === 0" class="dropdown-empty">No matching models</div>
+                      <template v-for="group in filteredGroupedModelOptions" :key="group.providerID">
+                        <div class="input-dropdown-group-label">{{ group.label }}</div>
+                        <DropdownItem v-for="model in group.models" :key="model.id" :value="model.id">
+                          <div class="model-dropdown-item">
+                            <span class="model-dropdown-name">{{ model.displayName }}</span>
+                            <span class="model-dropdown-path"
+                              >{{ model.providerID }}/{{ model.modelID }}</span
+                            >
+                          </div>
+                        </DropdownItem>
+                      </template>
+                    </div>
+                  </div>
                 </div>
               </template>
             </Dropdown>
@@ -217,7 +234,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Directive } from 'vue';
 import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
@@ -276,6 +293,16 @@ const messageValue = computed({
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const modelDropdownRef = ref<HTMLElement | null>(null);
+const modelDropdownComponent = ref<InstanceType<typeof Dropdown> | null>(null);
+const modelSearchQuery = ref('');
+
+const vAutoFocus: Directive<HTMLElement> = {
+  mounted(el) {
+    modelSearchQuery.value = '';
+    nextTick(() => el.focus());
+  },
+};
+
 const activeCommandIndex = ref(0);
 const acceptMime = 'image/png,image/jpeg,image/gif,image/webp';
 
@@ -448,6 +475,30 @@ function openModelPicker() {
   button.focus();
   button.click();
   return true;
+}
+
+function handleModelSearchKeydown(e: KeyboardEvent) {
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    e.stopPropagation();
+    modelDropdownComponent.value?.moveHighlight('down');
+    return;
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    e.stopPropagation();
+    modelDropdownComponent.value?.moveHighlight('up');
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    e.stopPropagation();
+    modelDropdownComponent.value?.selectHighlighted();
+    return;
+  }
+  if (e.key === 'Escape') {
+    return;
+  }
 }
 
 function handleModelDropdownOpenChange(open: boolean) {
@@ -686,6 +737,26 @@ const groupedModelOptions = computed(() => {
   return Array.from(grouped.values());
 });
 
+function matchesQuery(query: string, ...fields: (string | undefined)[]) {
+  const terms = query.split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return false;
+  return terms.every((term) => fields.some((field) => field?.toLowerCase().includes(term)));
+}
+
+const filteredGroupedModelOptions = computed(() => {
+  const query = modelSearchQuery.value.trim().toLowerCase();
+  if (!query) return groupedModelOptions.value;
+  return groupedModelOptions.value
+    .map((group) => {
+      const models = group.models.filter((model) =>
+        matchesQuery(query, model.displayName, model.modelID, model.providerID, group.label),
+      );
+      if (models.length === 0) return null;
+      return { ...group, models };
+    })
+    .filter((group): group is NonNullable<typeof group> => group !== null);
+});
+
 function focus() {
   textareaRef.value?.focus();
 }
@@ -805,6 +876,10 @@ const inputMessageStyle = computed(() => {
   outline: none;
 }
 
+:deep(.input-dropdown-popup:has(.model-picker)) {
+  overflow: hidden;
+}
+
 .dropdown-list {
   display: flex;
   flex-direction: column;
@@ -878,6 +953,47 @@ const inputMessageStyle = computed(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(280px - 12px);
+  overflow: hidden;
+  margin: -6px;
+  padding: 6px;
+}
+
+.model-picker-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.model-search {
+  flex: 0 0 auto;
+  padding: 0 0 4px;
+}
+
+.model-search-input {
+  width: 100%;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.55);
+  color: #e2e8f0;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 4px 6px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.model-search-input:focus {
+  border-color: #60a5fa;
+}
+
+.model-search-input::placeholder {
+  color: #64748b;
 }
 
 .model-dropdown-item {
