@@ -223,6 +223,7 @@
     />
     <ProjectSettingsDialog
       :open="!!editingProject"
+      :base-url="credentials.baseUrl.value"
       :project-id="editingProject?.projectId ?? ''"
       :worktree="editingProject?.worktree ?? ''"
       :name="editingProjectMeta?.name"
@@ -782,10 +783,9 @@ const subagentWindows = useSubagentWindows({
 const projectDirectory = ref('');
 const homePath = ref('');
 const serverWorktreePath = ref('');
-const worktreeNameByDirectory = ref<Record<string, string>>({});
 const projectColorById = ref<Record<string, string>>({});
 const projectMetaById = ref<Record<string, ProjectInfo>>({});
-const loadingWorktreeNameDirectories = new Set<string>();
+
 const initialQuery = readQuerySelection();
 const isProjectPickerOpen = ref(false);
 const editingProject = ref<{ projectId: string; worktree: string } | null>(null);
@@ -953,8 +953,11 @@ const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
         .flatMap((sandbox) => sandbox.sessions)
         .reduce((max, session) => Math.max(max, session.timeUpdated ?? 0), 0);
 
-      const name = worktreeNameByDirectory.value[worktreeDirectory]?.trim() || undefined;
       const projectId = sessionGraphStore.resolveProjectIDForDirectory(worktreeDirectory);
+      const meta = projectId ? projectMetaById.value[projectId] : undefined;
+      const name = meta?.name?.trim()
+        || worktreeDirectory.replace(/\/+$/, '').split('/').pop()
+        || undefined;
       const projectColor = projectId ? projectColorById.value[projectId] : undefined;
       return {
         directory: worktreeDirectory,
@@ -976,56 +979,20 @@ const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
   return worktreeEntries;
 });
 
-/** Resolve package.json name for a worktree directory (fire-and-forget). */
-async function resolveWorktreeName(dir: string) {
-  if (worktreeNameByDirectory.value[dir] !== undefined) return;
-  if (loadingWorktreeNameDirectories.has(dir)) return;
-  loadingWorktreeNameDirectories.add(dir);
-  try {
-    const result = (await opencodeApi.readFileContent(credentials.baseUrl.value, {
-      directory: dir,
-      path: 'package.json',
-    })) as FileContentResponse | string;
-    const content = typeof result === 'string' ? result : result?.content;
-    if (!content) {
-      worktreeNameByDirectory.value[dir] = '';
-      return;
-    }
-    const isBase64 = typeof result !== 'string' && result?.encoding === 'base64';
-    const decoded =
-      typeof content === 'string' && isBase64
-        ? decodeApiTextContent(result as FileContentResponse)
-        : content;
-    const parsed = JSON.parse(decoded);
-    worktreeNameByDirectory.value[dir] = parsed?.name ?? '';
-  } catch {
-    worktreeNameByDirectory.value[dir] = '';
-  } finally {
-    loadingWorktreeNameDirectories.delete(dir);
-  }
-}
-
-/** Resolve VCS branch for a sandbox directory via /vcs (fire-and-forget). */
+/** Resolve VCS branch for a directory via /vcs (fire-and-forget). */
 function resolveVcsBranch(dir: string) {
   if (sessionGraphStore.getVcsInfo(dir)) return;
   void fetchWorktreeMeta(dir);
-}
-
-/** Resolve all metadata for a worktree directory: package.json name + /vcs branch. */
-function resolveWorktreeDirectory(dir: string) {
-  void resolveWorktreeName(dir);
-  resolveVcsBranch(dir);
 }
 
 watch(
   [allWorktreeDirectories, allSandboxDirectories],
   ([worktreeDirs, sandboxDirs]) => {
     const worktreeSet = new Set(worktreeDirs);
-    // Worktree directories: package.json name + /vcs branch
+    // Resolve VCS branch for all worktree and sandbox directories
     for (const dir of worktreeDirs) {
-      resolveWorktreeDirectory(dir);
+      resolveVcsBranch(dir);
     }
-    // Sandbox directories: /vcs branch only (skip those already handled as worktrees)
     for (const dir of sandboxDirs) {
       if (worktreeSet.has(dir)) continue;
       resolveVcsBranch(dir);
@@ -2545,8 +2512,8 @@ function openProjectPicker() {
   isProjectPickerOpen.value = true;
 }
 
-async function createNewSession() {
-  if (!ensureConnectionReady('Creating session')) return;
+async function createNewSession(): Promise<SessionInfo | undefined> {
+  if (!ensureConnectionReady('Creating session')) return undefined;
   sessionError.value = '';
   try {
     const data = (await opencodeApi.createSession(
@@ -2569,8 +2536,10 @@ async function createNewSession() {
       if (data.directory) activeDirectory.value = data.directory;
     }
     void refreshSessionsForDirectory(activeDirectory.value || undefined);
+    return data;
   } catch (error) {
     sessionError.value = `Session create failed: ${toErrorMessage(error)}`;
+    return undefined;
   }
 }
 
@@ -2721,11 +2690,47 @@ async function handleRevertMessage(payload: { sessionId: string; messageId: stri
   }
 }
 
+/** Set project name from package.json for newly created projects (fire-and-forget). */
+async function initProjectNameFromPackageJson(projectId: string, directory: string) {
+  try {
+    const result = (await opencodeApi.readFileContent(credentials.baseUrl.value, {
+      directory,
+      path: 'package.json',
+    })) as FileContentResponse | string;
+    const content = typeof result === 'string' ? result : result?.content;
+    if (!content) return;
+    const isBase64 = typeof result !== 'string' && result?.encoding === 'base64';
+    const decoded =
+      typeof content === 'string' && isBase64
+        ? decodeApiTextContent(result as FileContentResponse)
+        : content;
+    const parsed = JSON.parse(decoded);
+    const name = parsed?.name;
+    if (typeof name !== 'string' || !name.trim()) return;
+    const updated = await opencodeApi.updateProject(
+      credentials.baseUrl.value,
+      projectId,
+      { directory, name: name.trim() },
+    );
+    if (updated && typeof updated === 'object') {
+      upsertProject(updated as ProjectInfo);
+    }
+  } catch {
+    // Silently ignore - package.json may not exist or be invalid
+  }
+}
+
 async function handleProjectDirectorySelect(directory: string) {
   isProjectPickerOpen.value = false;
   if (!directory) return;
+
+  // Check if this is a new project (no existing project with matching worktree)
+  const isNewProject = !Object.values(projectMetaById.value)
+    .some((p) => p.worktree === directory);
+
   projectDirectory.value = directory;
   activeDirectory.value = directory;
+
   // Auto-create a session when the opened directory has none
   const list = await listSessionsByDirectory({
     directory,
@@ -2734,8 +2739,17 @@ async function handleProjectDirectorySelect(directory: string) {
     limit: ROOT_SESSION_BOOTSTRAP_LIMIT,
   });
   setSessions(list, directory);
+
+  let session: SessionInfo | undefined;
   if (!list.some((s) => !s.parentID && !s.time?.archived)) {
-    await createNewSession();
+    session = await createNewSession();
+  }
+
+  // For new projects, try to set name from package.json
+  const newProjectId = session?.projectID
+    || sessionGraphStore.resolveProjectIDForDirectory(directory);
+  if (isNewProject && newProjectId && newProjectId !== 'global') {
+    void initProjectNameFromPackageJson(newProjectId, directory);
   }
 }
 

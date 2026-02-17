@@ -16,12 +16,23 @@
       <form class="modal-body" @submit.prevent="handleSubmit">
         <div class="field">
           <label class="field-label">Name</label>
-          <input
-            v-model="form.name"
-            type="text"
-            class="field-input"
-            :placeholder="defaultName"
-          />
+          <div class="name-row">
+            <input
+              v-model="form.name"
+              type="text"
+              class="field-input"
+              :placeholder="defaultName"
+            />
+            <button
+              type="button"
+              class="sync-button"
+              :disabled="!packageJsonName"
+              :title="packageJsonName ? `Sync from package.json: ${packageJsonName}` : 'Sync from package.json'"
+              @click="form.name = packageJsonName!"
+            >
+              <Icon icon="lucide:refresh-cw" :width="14" :height="14" />
+            </button>
+          </div>
         </div>
 
         <div class="field">
@@ -102,6 +113,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from 'vue';
 import { Icon } from '@iconify/vue';
+import * as opencodeApi from '../utils/opencode';
 
 const COLOR_KEYS = ['pink', 'mint', 'orange', 'purple', 'cyan', 'lime'] as const;
 
@@ -116,6 +128,7 @@ const COLOR_HEX: Record<string, { text: string; bg: string }> = {
 
 const props = defineProps<{
   open: boolean;
+  baseUrl: string;
   projectId: string;
   worktree: string;
   name?: string;
@@ -139,6 +152,7 @@ const dialogRef = ref<HTMLDialogElement | null>(null);
 const iconInput = ref<HTMLInputElement | null>(null);
 const saving = ref(false);
 const dragOver = ref(false);
+const packageJsonName = ref<string | undefined>(undefined);
 
 const form = reactive({
   name: '',
@@ -155,7 +169,9 @@ const defaultName = computed(() => {
 
 const avatarLetter = computed(() => {
   const name = form.name.trim() || defaultName.value;
-  return name.charAt(0).toUpperCase();
+  // For scoped packages like "@scope/foo", use the basename part
+  const basename = name.replace(/^@[^/]*\//, '');
+  return (basename.charAt(0) || name.charAt(0)).toUpperCase();
 });
 
 const avatarStyle = computed(() => {
@@ -180,11 +196,34 @@ watch(() => props.open, (open) => {
     form.startup = props.commandsStart || '';
     saving.value = false;
     dragOver.value = false;
+    packageJsonName.value = undefined;
     if (!el.open) el.showModal();
+    void fetchPackageJsonName();
   } else if (el.open) {
     el.close();
   }
 });
+
+async function fetchPackageJsonName() {
+  if (!props.baseUrl || !props.worktree) return;
+  try {
+    const result = await opencodeApi.readFileContent(props.baseUrl, {
+      directory: props.worktree,
+      path: 'package.json',
+    }) as { content?: string; encoding?: string } | string;
+    const content = typeof result === 'string' ? result : result?.content;
+    if (!content) return;
+    const isBase64 = typeof result !== 'string' && result?.encoding === 'base64';
+    const decoded = isBase64 ? atob(content) : content;
+    const parsed = JSON.parse(decoded);
+    const name = parsed?.name;
+    if (typeof name === 'string' && name.trim()) {
+      packageJsonName.value = name.trim();
+    }
+  } catch {
+    // package.json not found or invalid — leave button disabled
+  }
+}
 
 function handleFileSelect(file: File) {
   if (!file.type.startsWith('image/')) return;
@@ -315,6 +354,40 @@ async function handleSubmit() {
   font-size: 12px;
   font-weight: 500;
   color: #94a3b8;
+}
+
+.name-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.name-row .field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sync-button {
+  flex: 0 0 auto;
+  width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #111a2c;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.sync-button:hover:not(:disabled) {
+  background: #1d2a45;
+  color: #e2e8f0;
+}
+
+.sync-button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .field-input,
