@@ -185,6 +185,15 @@
       </div>
       <button
         type="button"
+        class="input-button suppress-button"
+        :class="{ active: suppressAutoWindows }"
+        :title="suppressAutoWindows ? 'Auto windows suppressed' : 'Suppress auto windows'"
+        @click="suppressAutoWindows = !suppressAutoWindows"
+      >
+        <Icon :icon="suppressAutoWindows ? 'lucide:eye-off' : 'lucide:eye'" :width="16" :height="16" />
+      </button>
+      <button
+        type="button"
         class="input-button attach-button"
         :disabled="props.disabled || props.canAttach === false"
         title="Attach"
@@ -283,7 +292,7 @@ const modelSearchQuery = ref('');
 const activeCommandIndex = ref(0);
 const acceptMime = 'image/png,image/jpeg,image/gif,image/webp';
 
-const { enterToSend } = useSettings();
+const { enterToSend, suppressAutoWindows } = useSettings();
 
 // --- Input history navigation ---
 const { roots: messageRoots, getTextContent } = useMessages();
@@ -1239,7 +1248,17 @@ const inputMessageStyle = computed(() => {
   color: #fca5a5;
 }
 
-.attach-button {
+.suppress-button {
   margin-left: auto;
+}
+
+.suppress-button.active {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+.suppress-button.active:hover {
+  background: rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
 }
 </style>

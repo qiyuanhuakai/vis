@@ -17,13 +17,14 @@ type UseSubagentWindowsOptions = {
   theme: () => string;
   closeDelayMs: number;
   resolveModelName?: (providerID: string, modelID: string) => string | undefined;
+  suppressAutoWindows?: Ref<boolean>;
 };
 
 const SUBAGENT_WINDOW_PREFIX = 'subagent:';
 const SUBAGENT_WINDOW_COLOR = '#0ea5e9';
 
 export function useSubagentWindows(options: UseSubagentWindowsOptions) {
-  const { selectedSessionId, fw, subagentComponent, theme, closeDelayMs, resolveModelName } = options;
+  const { selectedSessionId, fw, subagentComponent, theme, closeDelayMs, resolveModelName, suppressAutoWindows } = options;
   let boundScope = options.scope;
   const acc = useDeltaAccumulator();
 
@@ -115,22 +116,24 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
       ? `🤖 [${modelLabel}] ${agentPart}Working...`
       : `🤖 ${agentPart}Working...`;
 
-    void fw.open(windowKey, {
-      component: subagentComponent,
-      props: {
-        entries: [...sessionEntries],
-        theme: theme(),
-      },
-      title,
-      scroll: 'follow',
-      resizable: true,
-      closable: false,
-      color: SUBAGENT_WINDOW_COLOR,
-      variant: 'message',
-      expiresAt: Number.MAX_SAFE_INTEGER,
-      width: 600,
-      height: 400,
-    });
+    if (!suppressAutoWindows?.value) {
+      void fw.open(windowKey, {
+        component: subagentComponent,
+        props: {
+          entries: [...sessionEntries],
+          theme: theme(),
+        },
+        title,
+        scroll: 'follow',
+        resizable: true,
+        closable: false,
+        color: SUBAGENT_WINDOW_COLOR,
+        variant: 'message',
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        width: 600,
+        height: 400,
+      });
+    }
   }
 
   const unsubs: Array<() => void> = [];

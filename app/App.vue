@@ -295,6 +295,7 @@ import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { createSessionGraphStore } from './utils/sessionGraph';
 import { splitFileContentDirectoryAndPath } from './utils/path';
 import { useCredentials } from './composables/useCredentials';
+import { useSettings } from './composables/useSettings';
 import {
   StorageKeys,
   storageGet,
@@ -305,6 +306,7 @@ import {
 } from './utils/storageKeys';
 
 const credentials = useCredentials();
+const { suppressAutoWindows } = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
 const TOOL_PENDING_TTL_MS = 60_000;
 const TOOL_COMPLETE_TTL_MS = 2_000;
@@ -472,6 +474,20 @@ type ComposerDraft = {
 };
 
 const fw = useFloatingWindows();
+
+// Close auto-opened floating windows when suppress is toggled ON.
+// Tool auto windows: closable === false AND finite expiry (not Infinity).
+// Reasoning/subagent windows: closable === false AND key starts with 'reasoning:' or 'subagent:'.
+// Permission/question (closable: false, expiry: Infinity) are excluded.
+watch(suppressAutoWindows, (suppressed) => {
+  if (!suppressed) return;
+  for (const entry of fw.entries.value) {
+    if (!entry.closable && (entry.expiresAt < Number.MAX_SAFE_INTEGER || entry.key.startsWith('reasoning:') || entry.key.startsWith('subagent:'))) {
+      void fw.close(entry.key);
+    }
+  }
+});
+
 const appEl = ref<HTMLDivElement | null>(null);
 const outputEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLElement | null>(null);
@@ -763,6 +779,7 @@ const reasoning = useReasoningWindows({
     const key = `${providerID}/${modelID}`;
     return modelOptions.value.find((m) => m.id === key)?.displayName;
   },
+  suppressAutoWindows,
 });
 const {
   updateReasoningExpiry,
@@ -778,6 +795,7 @@ const subagentWindows = useSubagentWindows({
     const key = `${providerID}/${modelID}`;
     return modelOptions.value.find((m) => m.id === key)?.displayName;
   },
+  suppressAutoWindows,
 });
 
 const projectDirectory = ref('');
@@ -6993,6 +7011,7 @@ onMounted(() => {
   globalEventUnsubscribers.push(
     sessionScope.on('message.part.updated', ({ part }) => {
       if (part.type !== 'tool') return;
+      if (suppressAutoWindows.value) return;
       openToolPartAsWindow(part);
     }),
   );

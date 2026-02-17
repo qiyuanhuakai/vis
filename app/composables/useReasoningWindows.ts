@@ -22,13 +22,14 @@ type UseReasoningWindowsOptions = {
   theme: () => string;
   reasoningCloseDelayMs: number;
   resolveModelName?: (providerID: string, modelID: string) => string | undefined;
+  suppressAutoWindows?: Ref<boolean>;
 };
 
 const REASONING_WINDOW_PREFIX = 'reasoning:';
 const REASONING_WINDOW_COLOR = '#8b5cf6';
 
 export function useReasoningWindows(options: UseReasoningWindowsOptions) {
-  const { selectedSessionId, fw, reasoningComponent, theme, reasoningCloseDelayMs, resolveModelName } = options;
+  const { selectedSessionId, fw, reasoningComponent, theme, reasoningCloseDelayMs, resolveModelName, suppressAutoWindows } = options;
   let boundScope = options.scope;
   const acc = useDeltaAccumulator();
 
@@ -170,22 +171,24 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
       : isSubagent ? '[subagent]' : undefined;
     const title = titleTag ? `🤔 ${titleTag} Thinking...` : '🤔 Thinking...';
 
-    void fw.open(windowKey, {
-      component: reasoningComponent,
-      props: {
-        entries: [...sessionEntries],
-        theme: theme(),
-      },
-      title,
-      scroll: 'follow',
-      resizable: true,
-      closable: false,
-      color: REASONING_WINDOW_COLOR,
-      variant: 'message',
-      expiresAt: Number.MAX_SAFE_INTEGER,
-      width: 600,
-      height: 400,
-    });
+    if (!suppressAutoWindows?.value) {
+      void fw.open(windowKey, {
+        component: reasoningComponent,
+        props: {
+          entries: [...sessionEntries],
+          theme: theme(),
+        },
+        title,
+        scroll: 'follow',
+        resizable: true,
+        closable: false,
+        color: REASONING_WINDOW_COLOR,
+        variant: 'message',
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        width: 600,
+        height: 400,
+      });
+    }
 
     if (part.time?.end) {
       markReasoningFinished(resolvedSessionId, messageId);
