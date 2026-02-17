@@ -420,6 +420,18 @@ export function createSessionGraphStore() {
     return changed;
   }
 
+  function mergeSession(info: SessionGraphSession, options: UpsertOptions = {}) {
+    if (!info?.id) return false;
+    const existingKey = resolveNodeKey(info.id, info.projectID || options.projectIDHint);
+    const existing = existingKey ? nodesByKey.get(existingKey) : undefined;
+    if (existing) {
+      const incomingUpdated = info.time?.updated ?? 0;
+      const existingUpdated = existing.timeUpdated ?? 0;
+      if (incomingUpdated > 0 && existingUpdated >= incomingUpdated) return false;
+    }
+    return upsertSession(info, options);
+  }
+
   function removeSession(sessionID: string, projectID?: string) {
     if (!sessionID) return false;
     const targets = projectID
@@ -455,35 +467,15 @@ export function createSessionGraphStore() {
     return true;
   }
 
-  function syncStatusesForProject(projectID: string, entries: [string, SessionStatusType][]) {
+  function fillMissingStatuses(projectID: string, entries: [string, SessionStatusType][]) {
     if (!projectID) return false;
-    const busyKeys = new Set<string>();
     let changed = false;
-    entries.forEach(([sessionID, status]) => {
-      const key = resolveNodeKey(sessionID, projectID);
-      if (!key) return;
-      busyKeys.add(key);
-      if (statusByKey.get(key) !== status) {
-        statusByKey.set(key, status);
-        changed = true;
-      }
-      const node = nodesByKey.get(key);
-      if (node && (status === 'busy' || status === 'retry')) node.lastActiveAt = Date.now();
-    });
-    const prefix = `${projectID}:`;
-    statusByKey.forEach((status, key) => {
-      const node = nodesByKey.get(key);
-      const mappedProjectID = node?.directory
-        ? getSandboxByDirectory(node.directory)?.projectID
-        : undefined;
-      const belongsToSyncedProject = key.startsWith(prefix) || mappedProjectID === projectID;
-      if (!belongsToSyncedProject) return;
-      if (busyKeys.has(key)) return;
-      if (status === 'busy' || status === 'retry') {
-        statusByKey.set(key, 'idle');
-        changed = true;
-      }
-    });
+    for (const [sessionID, status] of entries) {
+      const key = buildSessionKey(projectID, sessionID);
+      if (statusByKey.has(key)) continue;
+      statusByKey.set(key, status);
+      changed = true;
+    }
     if (changed) bump();
     return changed;
   }
@@ -755,6 +747,42 @@ export function createSessionGraphStore() {
     return false;
   }
 
+  function cloneProjectState() {
+    const clonedTree = new Map<string, Map<string, SandboxEntry>>();
+    tree.forEach((sandboxes, worktree) => {
+      const clonedSandboxes = new Map<string, SandboxEntry>();
+      sandboxes.forEach((entry, sandbox) => {
+        clonedSandboxes.set(sandbox, {
+          worktree: entry.worktree,
+          directory: entry.directory,
+          projectID: entry.projectID,
+          branch: entry.branch,
+          sessionIDs: new Set(),
+        });
+      });
+      clonedTree.set(worktree, clonedSandboxes);
+    });
+    return clonedTree;
+  }
+
+  function importProjectState(clonedTree: Map<string, Map<string, SandboxEntry>>) {
+    tree.clear();
+    clonedTree.forEach((sandboxes, worktree) => {
+      const newSandboxes = new Map<string, SandboxEntry>();
+      sandboxes.forEach((entry, sandbox) => {
+        newSandboxes.set(sandbox, {
+          worktree: entry.worktree,
+          directory: entry.directory,
+          projectID: entry.projectID,
+          branch: entry.branch,
+          sessionIDs: new Set(),
+        });
+      });
+      tree.set(worktree, newSandboxes);
+    });
+    bump();
+  }
+
   function getStatus(sessionID: string, projectID?: string): SessionStatusType | undefined {
     const key = resolveNodeKey(sessionID, projectID);
     if (key) {
@@ -893,10 +921,11 @@ export function createSessionGraphStore() {
     getProjectRootForProject,
     getProjectDirectoryForProject,
     upsertSession,
+    mergeSession,
     upsertSessions,
     removeSession,
     setStatus,
-    syncStatusesForProject,
+    fillMissingStatuses,
     getSession,
     getProjectIDForSession,
     getRootSessions,
@@ -908,6 +937,8 @@ export function createSessionGraphStore() {
     setProjects,
     upsertProjectEntry,
     getProjects,
+    cloneProjectState,
+    importProjectState,
     getProjectEntry,
     collectProjectDirectories,
     setWorktrees,
