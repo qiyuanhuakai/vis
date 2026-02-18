@@ -131,6 +131,11 @@ function onClose() {
   emit('close', props.entry.key);
 }
 
+function onBodyClick() {
+  if (bodyEl.value?.contains(document.activeElement)) return;
+  bodyEl.value?.focus();
+}
+
 // Drag handling — direct DOM manipulation to avoid triggering Vue restyle
 // During drag, we bypass Vue reactivity entirely and sync back on drag end.
 let lastPointerX = 0;
@@ -343,6 +348,8 @@ function onResizeEnd(e: PointerEvent) {
         class="floating-window-body" 
         :class="scrollClass"
         ref="bodyEl"
+        tabindex="-1"
+        @click="onBodyClick"
       >
         <template v-if="entry.component">
           <component 

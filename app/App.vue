@@ -4157,6 +4157,22 @@ const DOUBLE_ESC_THRESHOLD = 500;
 const DOUBLE_CTRL_G_THRESHOLD = 500;
 
 function handleGlobalKeydown(event: KeyboardEvent) {
+  // Ctrl-A: select all content in focused div (floating window body)
+  if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'a') {
+    const active = document.activeElement;
+    if (active instanceof HTMLDivElement) {
+      event.stopPropagation();
+      event.preventDefault();
+      const selection = window.getSelection();
+      if (!selection) return;
+      const range = document.createRange();
+      range.selectNodeContents(active);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return;
+    }
+  }
+
   // Ctrl-;: new chat
   if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === ';') {
     event.preventDefault();
