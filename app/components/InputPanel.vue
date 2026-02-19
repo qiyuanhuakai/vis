@@ -371,7 +371,13 @@ type DropdownRef = {
 const historyDropdownRef = ref<DropdownRef | null>(null);
 const favoritesDropdownRef = ref<DropdownRef | null>(null);
 
-type HistoryEntry = { text: string; agent?: string; agentColor?: string; model?: string; variant?: string };
+type HistoryEntry = {
+  text: string;
+  agent?: string;
+  agentColor?: string;
+  model?: string;
+  variant?: string;
+};
 
 const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteMessages();
 
