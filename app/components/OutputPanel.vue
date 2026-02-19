@@ -267,7 +267,7 @@ const emit = defineEmits<{
   (event: 'show-message-diff', payload: { messageKey: string; diffs: DiffEntry[] }): void;
   (event: 'open-image', payload: { url: string; filename: string }): void;
   (event: 'show-thread-history', payload: { entries: HistoryWindowEntry[] }): void;
-  (event: 'open-file', path: string): void;
+  (event: 'open-file', path: string, line?: number, endLine?: number): void;
   (event: 'message-rendered'): void;
   (event: 'content-resized'): void;
   (event: 'initial-render-complete'): void;
@@ -711,15 +711,24 @@ const lastSubmitted = new Map<
 const filePopup = reactive({
   visible: false,
   candidates: [] as string[],
+  line: undefined as number | undefined,
+  endLine: undefined as number | undefined,
   style: {} as Record<string, string>,
 });
 
 function closeFilePopup() {
   filePopup.visible = false;
   filePopup.candidates = [];
+  filePopup.line = undefined;
+  filePopup.endLine = undefined;
 }
 
-function showFilePopup(anchorEl: HTMLElement, candidates: string[]) {
+function showFilePopup(
+  anchorEl: HTMLElement,
+  candidates: string[],
+  line?: number,
+  endLine?: number,
+) {
   const rect = anchorEl.getBoundingClientRect();
   const maxWidth = Math.min(window.innerWidth - 16, 480);
   const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - maxWidth - 8));
@@ -730,12 +739,23 @@ function showFilePopup(anchorEl: HTMLElement, candidates: string[]) {
     maxWidth: `${maxWidth}px`,
   };
   filePopup.candidates = candidates;
+  filePopup.line = line;
+  filePopup.endLine = endLine;
   filePopup.visible = true;
 }
 
 function openFileFromPopup(path: string) {
+  const line = filePopup.line;
+  const endLine = filePopup.endLine;
   closeFilePopup();
-  emit('open-file', path);
+  emit('open-file', path, line, endLine);
+}
+
+function parsePositiveInt(raw?: string) {
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) return undefined;
+  return value;
 }
 
 function handleContentClick(event: MouseEvent) {
@@ -753,13 +773,19 @@ function handleContentClick(event: MouseEvent) {
   const ref = rawRef?.trim();
   if (!ref) return;
 
+  const line = parsePositiveInt(fileRefEl.dataset.fileLine);
+  let endLine = parsePositiveInt(fileRefEl.dataset.fileEndLine);
+  if (line && endLine && endLine < line) {
+    endLine = line;
+  }
+
   const candidates = resolveFileRef(ref);
   if (candidates.length === 0) return;
   if (candidates.length === 1) {
-    emit('open-file', candidates[0]);
+    emit('open-file', candidates[0], line, endLine);
     return;
   }
-  showFilePopup(fileRefEl, candidates);
+  showFilePopup(fileRefEl, candidates, line, endLine);
 }
 
 function submitAssistantRender(rootId: string, answerId: string, content: string) {
