@@ -22,7 +22,7 @@
               <button
                 type="button"
                 class="history-action-button"
-                :class="{ 'is-favorited': isFavorite(entry.text) }"
+                :class="{ 'is-favorited': isFavorite(entry) }"
                 title="Add to favorites"
                 @click.stop="addFavorite(entry)"
               >
@@ -371,7 +371,7 @@ type DropdownRef = {
 const historyDropdownRef = ref<DropdownRef | null>(null);
 const favoritesDropdownRef = ref<DropdownRef | null>(null);
 
-type HistoryEntry = { text: string; agent?: string; agentColor?: string };
+type HistoryEntry = { text: string; agent?: string; agentColor?: string; model?: string; variant?: string };
 
 const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteMessages();
 
@@ -383,7 +383,9 @@ const userHistory = computed(() => {
     if (!text) continue;
     const agent = 'agent' in msg ? (msg.agent as string | undefined) : undefined;
     const agentOption = agent ? props.agentOptions.find((a) => a.id === agent) : undefined;
-    result.push({ text, agent, agentColor: agentOption?.color });
+    const model = msg.model ? `${msg.model.providerID}/${msg.model.modelID}` : undefined;
+    const variant = msg.variant;
+    result.push({ text, agent, agentColor: agentOption?.color, model, variant });
   }
   return result;
 });
@@ -403,6 +405,8 @@ function toHistoryEntry(value: unknown): HistoryEntry | null {
   const entry: HistoryEntry = { text: candidate.text };
   if (typeof candidate.agent === 'string') entry.agent = candidate.agent;
   if (typeof candidate.agentColor === 'string') entry.agentColor = candidate.agentColor;
+  if (typeof candidate.model === 'string') entry.model = candidate.model;
+  if (typeof candidate.variant === 'string') entry.variant = candidate.variant;
   return entry;
 }
 
