@@ -153,6 +153,7 @@ export function createSseConnection(callbacks: SseConnectionCallbacks): SseConne
 
         if (disconnectRequested) return;
 
+        console.error('[SSE] Fetch failed:', error);
         callbacks.onError(String(error));
         scheduleReconnect();
       }
