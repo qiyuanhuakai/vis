@@ -1,7 +1,7 @@
 <template>
   <div class="top-panel">
     <div class="top-row">
-      <div class="top-left flex items-center gap-2">
+      <div class="top-left flex items-center gap-2" :title="gitRevision">
         <img width="48px" height="24px" src="/logo.svg" class="" />
         <div class="font-normal hidden lg:block relative top-0.5">OpenCode Visualizer</div>
       </div>
@@ -303,6 +303,9 @@ import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
 import DropdownSearch from './Dropdown/Search.vue';
+
+declare const __GIT_REVISION__: string;
+const gitRevision = typeof __GIT_REVISION__ !== 'undefined' ? __GIT_REVISION__ : 'dev';
 
 export type TopPanelSession = {
   id: string;

@@ -81,7 +81,9 @@
                 @toggle-dir="toggleTreeDirectory"
                 @select-file="selectTreeFile"
                 @open-diff="openGitDiff"
-                @open-diff-all="openAllGitDiff"
+                @open-diff-all="
+                  (payload: { mode: WorktreeSnapshotMode }) => openAllGitDiff(payload.mode)
+                "
                 @open-file="openFileViewer"
               />
             </div>
@@ -401,45 +403,107 @@ const FILE_SNAPSHOT_SCRIPT = [
   '  fi',
   'fi',
 ].join('\n');
-const WORKTREE_SNAPSHOT_SCRIPT = [
-  'stty -opost -echo 2>/dev/null',
-  'export GIT_PAGER=cat',
-  'export GIT_TERMINAL_PROMPT=0',
-  'printf "##TITLE\\tWorking tree (staged + changes)\\n"',
-  'git --no-pager status --porcelain=v1 2>/dev/null | while IFS= read -r line; do',
-  '  [ -z "$line" ] && continue',
-  '  x=${line%"${line#?}"}',
-  '  rest=${line#?}',
-  '  y=${rest%"${rest#?}"}',
-  '  [ "$x" = "?" ] && [ "$y" = "?" ] && continue',
-  '  path=${line#???}',
-  '  old=$path',
-  '  new=$path',
-  '  code=M',
-  '  if [ "$x" = "D" ] || [ "$y" = "D" ]; then',
-  '    code=D',
-  '  elif [ "$x" = "A" ]; then',
-  '    code=A',
-  '  elif [ "$x" = "R" ] || [ "$y" = "R" ]; then',
-  '    code=R',
-  '    old=${path%% -> *}',
-  '    new=${path#* -> }',
-  '  elif [ "$x" = "C" ] || [ "$y" = "C" ]; then',
-  '    code=C',
-  '    old=${path%% -> *}',
-  '    new=${path#* -> }',
-  '  fi',
-  '  printf "##FILE\\t%s\\t%s\\n" "$code" "$new"',
-  '  printf "##BEFORE\\n"',
-  '  if [ "$code" != "A" ]; then',
-  '    git --no-pager show "HEAD:$old" 2>/dev/null | base64 -w 76',
-  '  fi',
-  '  printf "##AFTER\\n"',
-  '  if [ "$code" != "D" ] && [ -f "$new" ]; then',
-  '    base64 -w 76 < "$new"',
-  '  fi',
-  'done',
-].join('\n');
+type WorktreeSnapshotMode = 'staged' | 'changes' | 'all';
+function buildWorktreeSnapshotScript(mode: WorktreeSnapshotMode): string {
+  const title =
+    mode === 'staged'
+      ? 'Staged changes'
+      : mode === 'changes'
+        ? 'Unstaged changes'
+        : 'Working tree (staged + changes)';
+  // Filter logic: which files to include based on mode
+  // x = index status (1st column), y = worktree status (2nd column)
+  let filterLines: string[];
+  if (mode === 'staged') {
+    // Only files with index changes (x != ' ' and x != '?')
+    filterLines = ['  [ "$x" = " " ] && continue', '  [ "$x" = "?" ] && continue'];
+  } else if (mode === 'changes') {
+    // Only files with worktree changes (y != ' ' and y != '?')
+    filterLines = ['  [ "$y" = " " ] && continue', '  [ "$y" = "?" ] && continue'];
+  } else {
+    // All: skip untracked only
+    filterLines = ['  [ "$x" = "?" ] && [ "$y" = "?" ] && continue'];
+  }
+  // Before/after source depends on mode
+  let beforeLines: string[];
+  let afterLines: string[];
+  if (mode === 'staged') {
+    // staged: HEAD -> index
+    beforeLines = [
+      '  printf "##BEFORE\\n"',
+      '  if [ "$code" != "A" ]; then',
+      '    git --no-pager show "HEAD:$old" 2>/dev/null | base64 -w 76',
+      '  fi',
+    ];
+    afterLines = [
+      '  printf "##AFTER\\n"',
+      '  if [ "$code" != "D" ]; then',
+      '    git --no-pager show ":$new" 2>/dev/null | base64 -w 76',
+      '  fi',
+    ];
+  } else if (mode === 'changes') {
+    // changes: index -> working tree
+    beforeLines = [
+      '  printf "##BEFORE\\n"',
+      '  if [ "$code" != "A" ]; then',
+      '    git --no-pager show ":$old" 2>/dev/null | base64 -w 76',
+      '  fi',
+    ];
+    afterLines = [
+      '  printf "##AFTER\\n"',
+      '  if [ "$code" != "D" ] && [ -f "$new" ]; then',
+      '    base64 -w 76 < "$new"',
+      '  fi',
+    ];
+  } else {
+    // all: HEAD -> working tree
+    beforeLines = [
+      '  printf "##BEFORE\\n"',
+      '  if [ "$code" != "A" ]; then',
+      '    git --no-pager show "HEAD:$old" 2>/dev/null | base64 -w 76',
+      '  fi',
+    ];
+    afterLines = [
+      '  printf "##AFTER\\n"',
+      '  if [ "$code" != "D" ] && [ -f "$new" ]; then',
+      '    base64 -w 76 < "$new"',
+      '  fi',
+    ];
+  }
+  return [
+    'stty -opost -echo 2>/dev/null',
+    'export GIT_PAGER=cat',
+    'export GIT_TERMINAL_PROMPT=0',
+    `printf "##TITLE\\t${title}\\n"`,
+    'git --no-pager status --porcelain=v1 2>/dev/null | while IFS= read -r line; do',
+    '  [ -z "$line" ] && continue',
+    '  x=${line%"${line#?}"}',
+    '  rest=${line#?}',
+    '  y=${rest%"${rest#?}"}',
+    ...filterLines,
+    '  path=${line#???}',
+    '  old=$path',
+    '  new=$path',
+    '  code=M',
+    '  if [ "$x" = "D" ] || [ "$y" = "D" ]; then',
+    '    code=D',
+    '  elif [ "$x" = "A" ]; then',
+    '    code=A',
+    '  elif [ "$x" = "R" ] || [ "$y" = "R" ]; then',
+    '    code=R',
+    '    old=${path%% -> *}',
+    '    new=${path#* -> }',
+    '  elif [ "$x" = "C" ] || [ "$y" = "C" ]; then',
+    '    code=C',
+    '    old=${path%% -> *}',
+    '    new=${path#* -> }',
+    '  fi',
+    '  printf "##FILE\\t%s\\t%s\\n" "$code" "$new"',
+    ...beforeLines,
+    ...afterLines,
+    'done',
+  ].join('\n');
+}
 const REASONING_CLOSE_DELAY_MS = 3000;
 const SUBAGENT_CLOSE_DELAY_MS = 3000;
 const ATTACHMENT_MIME_ALLOWLIST = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -4644,14 +4708,16 @@ async function openGitDiff(payload: { path: string; staged: boolean }) {
   }
 }
 
-async function openAllGitDiff() {
-  const key = 'git-diff:all';
+async function openAllGitDiff(mode: WorktreeSnapshotMode = 'all') {
+  const key = `git-diff:${mode}`;
   if (fw.has(key)) {
     fw.bringToFront(key);
     return;
   }
 
   const pos = getFileViewerPosition();
+  const loadingTitle =
+    mode === 'staged' ? 'staged diff' : mode === 'changes' ? 'unstaged diff' : 'working tree diff';
   await fw.open(key, {
     content: 'Loading all changes...',
     lang: 'text',
@@ -4659,7 +4725,7 @@ async function openAllGitDiff() {
     closable: true,
     resizable: true,
     scroll: 'manual',
-    title: 'working tree diff',
+    title: loadingTitle,
     x: pos.x,
     y: pos.y,
     width: FILE_VIEWER_WINDOW_WIDTH,
@@ -4672,7 +4738,7 @@ async function openAllGitDiff() {
       '--noprofile',
       '--norc',
       '-c',
-      WORKTREE_SNAPSHOT_SCRIPT,
+      buildWorktreeSnapshotScript(mode),
     ]);
     const snapshot = parseCommitSnapshotOutput(output);
     if (snapshot.files.length === 0) {
