@@ -175,7 +175,7 @@
           </TransitionGroup>
         </div>
       </div>
-      <footer v-if="minimizedEntries.length > 0" class="app-dock-panel" role="toolbar">
+      <footer v-if="showDockPanel" class="app-dock-panel" role="toolbar">
         <div class="window-dock-tray">
           <button
             v-for="entry in minimizedEntries"
@@ -392,7 +392,7 @@ import {
 
 const { t } = useI18n();
 const credentials = useCredentials();
-const { suppressAutoWindows, showMinimizeButtons, pinnedSessionsLimit } = useSettings();
+const { suppressAutoWindows, showMinimizeButtons, dockAlwaysOpen, pinnedSessionsLimit } = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
 const FILE_VIEWER_WINDOW_WIDTH = 840;
 const FILE_VIEWER_WINDOW_HEIGHT = 520;
@@ -652,6 +652,9 @@ function isSamePinnedSessionStore(a: LocalPinnedSessionStore, b: LocalPinnedSess
 
 const fw = useFloatingWindows();
 const minimizedEntries = computed(() => fw.entries.value.filter((entry) => entry.minimized));
+const showDockPanel = computed(
+  () => showMinimizeButtons.value && (dockAlwaysOpen.value || minimizedEntries.value.length > 0),
+);
 
 // Close auto-opened floating windows when suppress is toggled ON.
 // Tool auto windows: closable === false AND finite expiry (not Infinity).

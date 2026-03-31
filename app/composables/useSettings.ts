@@ -23,6 +23,7 @@ function readPinnedSessionsLimit() {
 const enterToSend = ref(storageGet(StorageKeys.settings.enterToSend) === 'true');
 const suppressAutoWindows = ref(storageGet(StorageKeys.settings.suppressAutoWindows) === 'true');
 const showMinimizeButtons = ref(storageGet(StorageKeys.settings.showMinimizeButtons) !== 'false');
+const dockAlwaysOpen = ref(storageGet(StorageKeys.settings.dockAlwaysOpen) === 'true');
 const pinnedSessionsLimit = ref(readPinnedSessionsLimit());
 
 watch(enterToSend, (value) => {
@@ -35,6 +36,15 @@ watch(suppressAutoWindows, (value) => {
 
 watch(showMinimizeButtons, (value) => {
   storageSet(StorageKeys.settings.showMinimizeButtons, String(value));
+});
+
+watch(dockAlwaysOpen, (value) => {
+  storageSet(StorageKeys.settings.dockAlwaysOpen, String(value));
+});
+
+watch(showMinimizeButtons, (value) => {
+  if (value) return;
+  dockAlwaysOpen.value = false;
 });
 
 watch(pinnedSessionsLimit, (value) => {
@@ -57,6 +67,9 @@ if (typeof window !== 'undefined') {
     if (event.key === storageKey(StorageKeys.settings.showMinimizeButtons)) {
       showMinimizeButtons.value = event.newValue !== 'false';
     }
+    if (event.key === storageKey(StorageKeys.settings.dockAlwaysOpen)) {
+      dockAlwaysOpen.value = event.newValue === 'true';
+    }
     if (event.key === storageKey(StorageKeys.settings.pinnedSessionsLimit)) {
       const parsed = event.newValue === null ? DEFAULT_PINNED_SESSIONS_LIMIT : Number(event.newValue);
       pinnedSessionsLimit.value = normalizePinnedSessionsLimit(parsed);
@@ -69,6 +82,7 @@ export function useSettings() {
     enterToSend,
     suppressAutoWindows,
     showMinimizeButtons,
+    dockAlwaysOpen,
     pinnedSessionsLimit,
     defaultPinnedSessionsLimit: DEFAULT_PINNED_SESSIONS_LIMIT,
     minPinnedSessionsLimit: MIN_PINNED_SESSIONS_LIMIT,
