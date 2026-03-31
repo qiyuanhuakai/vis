@@ -41,6 +41,28 @@
           </label>
         </div>
 
+        <div class="setting-row" :class="{ 'setting-row-disabled': !showMinimizeButtons }">
+          <div class="setting-info">
+            <div class="setting-label">Keep dock always visible</div>
+            <div class="setting-description">
+              Keep the dock bar visible even when no window is minimized. Only available when
+              minimization is enabled.
+            </div>
+          </div>
+          <label
+            class="toggle-switch"
+            :title="showMinimizeButtons ? 'Keep dock always visible' : 'Enable minimize first'"
+          >
+            <input
+              v-model="dockAlwaysOpen"
+              type="checkbox"
+              class="toggle-input"
+              :disabled="!showMinimizeButtons"
+            />
+            <span class="toggle-track" />
+          </label>
+        </div>
+
         <div class="setting-row setting-row-stack">
           <div class="setting-info">
             <div class="setting-label">Pinned sessions limit</div>
@@ -82,6 +104,7 @@ const dialogRef = ref<HTMLDialogElement | null>(null);
 const {
   enterToSend,
   showMinimizeButtons,
+  dockAlwaysOpen,
   pinnedSessionsLimit,
   minPinnedSessionsLimit,
   maxPinnedSessionsLimit,
@@ -190,6 +213,10 @@ watch(
 
 .setting-row-stack {
   align-items: flex-start;
+}
+
+.setting-row-disabled {
+  opacity: 0.55;
 }
 
 .setting-info {
