@@ -27,8 +27,8 @@ nohup node server.js 2>&1 &
 
 ## 声明
 
-这个项目是为opencode构建的第三方webui，因此在名称中包含了opencode。其并非由OpenCode团队开发，且与他们**没有**任何关联：由于我更改了仓库名，特此声明
-This project is a third-party web UI built for opencode, and therefore includes "opencode" in its name. It was **not** developed by the OpenCode team and has no affiliation with them: I am making this statement because I have changed the repository name.
+这个项目是为opencode构建的第三方webui，因此在名称中包含了opencode。其**并非**由OpenCode团队开发，且与他们**没有**任何关联：由于我更改了仓库名，特此声明 \
+This project is a third-party web UI built for opencode, and therefore includes "opencode" in its name. It was **not** developed by the OpenCode team and has **no** affiliation with them: I am making this statement because I have changed the repository name.
 
 以下为源仓库README文件：
 
