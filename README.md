@@ -1,4 +1,4 @@
-# 分叉说明
+## 分叉说明
 
 本仓库fork自[上游仓库](https://github.com/xenodrive/vis)，由于上游仓库不接受pr，因此我在本分叉进行了一些功能改进和本地化支持，包括：
 
@@ -24,6 +24,11 @@ node server.js
 nohup node server.js 2>&1 &
 ```
 将服务器放在后台持久运行。
+
+## 声明
+
+这个项目是为opencode构建的第三方webui，因此在名称中包含了opencode。其并非由OpenCode团队开发，且与他们**没有**任何关联：由于我更改了仓库名，特此声明
+This project is a third-party web UI built for opencode, and therefore includes "opencode" in its name. It was **not** developed by the OpenCode team and has no affiliation with them: I am making this statement because I have changed the repository name.
 
 以下为源仓库README文件：
 
