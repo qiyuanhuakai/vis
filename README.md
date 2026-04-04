@@ -1,3 +1,6 @@
+## 说明
+
+本fork已停止维护，该项目已迁移到新的[独立仓库](https://github.com/qiyuanhuakai/opencode-visualizer-cn)。
 ## 分叉说明
 
 本仓库fork自[上游仓库](https://github.com/xenodrive/vis)，由于上游仓库不接受pr，因此我在本分叉进行了一些功能改进和本地化支持，包括：
